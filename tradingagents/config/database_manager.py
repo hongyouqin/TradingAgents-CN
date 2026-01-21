@@ -62,7 +62,7 @@ class DatabaseManager:
             "socket_timeout": int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "60000")),
             "server_selection_timeout": int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
         }
-
+        
         # 从环境变量读取Redis配置
         self.redis_config = {
             "enabled": self.redis_enabled,

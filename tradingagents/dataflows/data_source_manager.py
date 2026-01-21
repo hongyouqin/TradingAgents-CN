@@ -4,6 +4,8 @@
 统一管理中国股票数据源的选择和切换，支持Tushare、AKShare、BaoStock等
 """
 
+import asyncio
+import nest_asyncio
 import os
 import time
 from typing import Dict, List, Optional, Any
@@ -23,6 +25,32 @@ logger = setup_dataflow_logging()
 
 # 导入统一数据源编码
 from tradingagents.constants import DataSourceCode
+
+def run_async_safe(coroutine):
+    """
+    安全运行异步协程的辅助函数。
+    如果已有事件循环，则在当前循环中安排任务；
+    如果没有，则创建新循环运行。
+    """
+    try:
+        # 尝试获取当前运行的事件循环
+        loop = asyncio.get_running_loop()
+        # 如果成功获取到，说明我们已经在异步环境中
+        # 这种情况下，我们不能使用 run_until_complete，需要安排任务
+        # 但因为我们可能在非异步函数中被调用，所以需要特殊处理
+        # 一个常见模式是创建新线程运行事件循环，或者改为：
+        # 调用方应使用 asyncio.create_task 或 await
+        # 作为降级方案，我们可以在此同步阻塞等待
+        nest_asyncio.apply(loop)  # 允许嵌套事件循环（需安装 nest_asyncio）
+        return loop.run_until_complete(coroutine)
+    except RuntimeError:
+        # 没有运行中的事件循环，可以安全创建新循环
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coroutine)
+        finally:
+            loop.close()
 
 
 class ChinaDataSource(Enum):
@@ -1193,6 +1221,7 @@ class DataSourceManager:
 
         start_time = time.time()
         try:
+            
             # 1. 先尝试从缓存获取
             cached_data = self._get_cached_data(symbol, start_date, end_date, max_age_hours=24)
             if cached_data is not None and not cached_data.empty:
@@ -1211,7 +1240,8 @@ class DataSourceManager:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
 
-                    stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                    # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                    stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                     stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
                 else:
                     stock_name = f'股票{symbol}'
@@ -1239,14 +1269,15 @@ class DataSourceManager:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date))
-
+            # data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date))
+            data = run_async_safe(provider.get_historical_data(symbol, start_date, end_date))
             if data is not None and not data.empty:
                 # 保存到缓存
                 self._save_to_cache(symbol, data, start_date, end_date)
 
                 # 获取股票基本信息（异步）
-                stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                 stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
 
                 # 格式化返回
@@ -1294,14 +1325,16 @@ class DataSourceManager:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
-
+            # data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
+            coro  = provider.get_historical_data(symbol, start_date, end_date, period)
+            data = run_async_safe(coro)
             duration = time.time() - start_time
-
             if data is not None and not data.empty:
                 # 🔧 修复：使用统一的格式化方法，包含技术指标计算
                 # 获取股票基本信息
-                stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
+                
                 stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
 
                 # 调用统一的格式化方法（包含技术指标计算）
@@ -1338,12 +1371,15 @@ class DataSourceManager:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
+        # data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
+        data = run_async_safe(provider.get_historical_data(symbol, start_date, end_date, period))
+        
 
         if data is not None and not data.empty:
             # 🔧 修复：使用统一的格式化方法，包含技术指标计算
             # 获取股票基本信息
-            stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+            # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+            stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
             stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
 
             # 调用统一的格式化方法（包含技术指标计算）
