@@ -3,17 +3,19 @@
 替代原有的基于配置文件的认证机制
 """
 
+from datetime import datetime
 import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field, validator
 
 from app.services.auth_service import AuthService
 from app.services.user_service import user_service
-from app.models.user import UserCreate, UserUpdate
-from app.services.operation_log_service import log_operation
+from app.models.user import RegistrationError, UserCreate, UserUpdate
+from app.services.operation_log_service import log_operation, log_login_failure
 from app.models.operation_log import ActionType
+import re
 
 # 尝试导入日志管理器
 try:
@@ -35,9 +37,122 @@ class ApiResponse(BaseModel):
 router = APIRouter()
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    """登录请求模型 - 支持多种登录方式"""
+    login_type: str = Field("password", description="登录类型: password-密码登录, sms-短信验证码登录")
+    identifier: str = Field(..., description="用户标识: 用户名/邮箱/手机号")
+    password: Optional[str] = Field(None, description="密码（密码登录时必填）")
+    sms_code: Optional[str] = Field(None, description="短信验证码（短信登录时必填）")
+    
+class SMSRequest(BaseModel):
+    phone: str
+    sms_type: str = "register"  # register, reset_password, login
+    
 
+class PhoneRegisterRequest(BaseModel):
+    """手机号注册请求模型"""
+    
+    phone: str = Field(
+        ...,
+        min_length=11,
+        max_length=11,
+        pattern=r'^1[3-9]\d{9}$',
+        description="手机号，11位数字，以1开头",
+        example="13800138000"
+    )
+    
+    sms_code: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        pattern=r'^\d{6}$',
+        description="6位数字短信验证码",
+        example="123456"
+    )
+    
+    password: str = Field(
+        ...,
+        min_length=8,
+        max_length=50,
+        description="密码，至少8个字符",
+        example="StrongPass123!"
+    )
+    
+    username: Optional[str] = Field(
+        None,
+        min_length=3,
+        max_length=20,
+        pattern=r'^[a-zA-Z0-9_\u4e00-\u9fa5]+$',
+        description="用户名，3-20个字符，支持中文、英文、数字、下划线",
+        example="用户_123"
+    )
+    
+    email: Optional[str] = Field(
+        None,
+        pattern=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
+        description="邮箱地址",
+        example="user@example.com"
+    )
+    
+    @validator('phone')
+    def validate_phone_format(cls, v):
+        """验证手机号格式"""
+        if not re.match(r'^1[3-9]\d{9}$', v):
+            raise ValueError('手机号格式不正确，必须是11位数字，以1开头')
+        return v
+    
+    @validator('password')
+    def validate_password_strength(cls, v):
+        """验证密码强度"""
+        if len(v) < 8:
+            raise ValueError('密码至少需要8个字符')
+        
+        # 检查是否包含数字
+        if not re.search(r'\d', v):
+            raise ValueError('密码必须包含至少一个数字')
+        
+        # 检查是否包含字母
+        if not re.search(r'[a-zA-Z]', v):
+            raise ValueError('密码必须包含至少一个字母')
+        
+        # 可选：检查特殊字符
+        # if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
+        #     raise ValueError('密码必须包含至少一个特殊字符')
+        
+        return v
+    
+    @validator('username')
+    def validate_username(cls, v):
+        """验证用户名"""
+        if v is None:
+            return v
+            
+        if len(v) < 3:
+            raise ValueError('用户名至少需要3个字符')
+        
+        if len(v) > 20:
+            raise ValueError('用户名不能超过20个字符')
+        
+        # 允许中文、英文、数字、下划线
+        if not re.match(r'^[a-zA-Z0-9_\u4e00-\u9fa5]+$', v):
+            raise ValueError('用户名只能包含中文、英文、数字和下划线')
+        
+        # 检查是否以数字开头
+        if re.match(r'^\d', v):
+            raise ValueError('用户名不能以数字开头')
+        
+        return v
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "phone": "13800138000",
+                "sms_code": "123456",
+                "password": "StrongPass123!",
+                "username": "trading_user",
+                "email": "user@example.com"
+            }
+        }
+        
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -65,7 +180,7 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str
     is_admin: bool = False
-
+        
 async def get_current_user(authorization: Optional[str] = Header(default=None)) -> dict:
     """获取当前用户信息"""
     logger.debug(f"🔐 认证检查开始")
@@ -113,8 +228,388 @@ async def get_current_user(authorization: Optional[str] = Header(default=None)) 
         "preferences": user.preferences.model_dump() if user.preferences else {}
     }
 
+
+@router.post("/send-sms")
+async def send_sms(request: SMSRequest):
+    if request.sms_type == "register":
+        success, message = await user_service.send_register_sms(request.phone)
+    elif request.sms_type == "reset_password":
+        success, message = await user_service.send_reset_password_sms(request.phone)
+    elif request.sms_type == 'login':
+        success, message = await user_service.send_login_sms(request.phone)
+    else:
+        raise HTTPException(status_code=400, detail="无效的短信类型")
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    return {"message": message}
+
+from fastapi import HTTPException
+from typing import Dict, Any
+
+@router.post("/register-by-phone", 
+            response_model=Dict[str, Any],
+            responses={
+                200: {
+                    "description": "注册成功",
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "success": True,
+                                "message": "注册成功",
+                                "data": {
+                                    "user": {
+                                        "id": "60d21b4667d0d8992e610c85",
+                                        "username": "user_3800_1234",
+                                        "phone": "13800138000",
+                                        "email": "user@example.com",
+                                        "is_verified": True
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                400: {
+                    "description": "注册失败",
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "success": False,
+                                "error_code": "sms_code_invalid",
+                                "message": "短信验证码无效或已过期",
+                                "detail": "请重新获取验证码"
+                            }
+                        }
+                    }
+                }
+            })
+async def register_by_phone(request: PhoneRegisterRequest):
+    """
+    手机号注册
+    
+    使用手机号+短信验证码+密码的方式注册新用户。
+    
+    **注意**：
+    - 手机号必须是11位有效号码
+    - 密码至少8个字符，包含字母和数字
+    - 短信验证码有效期为5分钟
+    """
+    
+    # 调用服务层方法
+    user, error_type, error_message = await user_service.create_user_by_phone(
+        phone=request.phone,
+        sms_code=request.sms_code,
+        password=request.password,
+        username=request.username,
+        email=request.email
+    )
+    
+    if user:
+        # 注册成功
+        return {
+            "success": True,
+            "message": "注册成功",
+            "data": {
+                "user": {
+                    "id": str(user.id),
+                    "username": user.username,
+                    "phone": user.phone,
+                    "email": user.email,
+                    "is_verified": user.is_verified,
+                    "register_type": getattr(user, 'register_type', 'phone'),
+                    "created_at": user.created_at.isoformat() if hasattr(user.created_at, 'isoformat') else str(user.created_at)
+                },
+                "token_info": {
+                    "note": "请调用登录接口获取访问令牌"
+                }
+            }
+        }
+    else:
+        # 注册失败，根据错误类型返回相应的HTTP状态码和错误信息
+        error_detail_map = {
+            RegistrationError.SMS_CODE_INVALID: {
+                "status_code": 400,
+                "detail": "短信验证码无效或已过期，请重新获取",
+                "suggestion": "请检查验证码是否正确，或重新发送验证码"
+            },
+            RegistrationError.PHONE_ALREADY_REGISTERED: {
+                "status_code": 409,  # Conflict
+                "detail": "该手机号已注册",
+                "suggestion": "请直接登录或使用其他手机号"
+            },
+            RegistrationError.USERNAME_ALREADY_EXISTS: {
+                "status_code": 409,  # Conflict
+                "detail": "用户名已被使用",
+                "suggestion": "请选择其他用户名"
+            },
+            RegistrationError.EMAIL_ALREADY_EXISTS: {
+                "status_code": 409,  # Conflict
+                "detail": "邮箱已被使用",
+                "suggestion": "请使用其他邮箱或直接登录"
+            },
+            RegistrationError.PASSWORD_TOO_WEAK: {
+                "status_code": 400,
+                "detail": "密码强度不足",
+                "suggestion": "密码至少8位，包含字母和数字"
+            },
+            RegistrationError.USERNAME_INVALID: {
+                "status_code": 400,
+                "detail": "用户名格式不正确",
+                "suggestion": "用户名3-20位，支持中文、英文、数字、下划线，不能以数字开头"
+            },
+            RegistrationError.DATABASE_ERROR: {
+                "status_code": 500,
+                "detail": "系统内部错误",
+                "suggestion": "请稍后重试"
+            }
+        }
+        
+        # 获取错误详情
+        error_detail = error_detail_map.get(
+            error_type, 
+            {
+                "status_code": 500,
+                "detail": "注册失败",
+                "suggestion": "请稍后重试"
+            }
+        )
+        
+        # 构建详细的错误响应
+        error_response = {
+            "success": False,
+            "error_code": error_type.value if hasattr(error_type, 'value') else str(error_type),
+            "message": error_message or error_detail["detail"],
+            "detail": error_detail["detail"],
+            "suggestion": error_detail["suggestion"],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # 记录错误日志
+        logger.error(f"❌ 手机号注册失败: phone={request.phone}, "
+                    f"error_type={error_type}, message={error_message}")
+        
+        # 抛出HTTP异常
+        raise HTTPException(
+            status_code=error_detail["status_code"],
+            detail=error_response
+        )
+
+@router.post("/reset-password-by-phone")
+async def reset_password_by_phone(request: ResetPasswordRequest):
+    '''
+        通过手机号重置密码
+    '''
+    success, message = await user_service.reset_password_by_phone(
+        phone=request.phone,
+        sms_code=request.sms_code,
+        new_password=request.new_password
+    )
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    return {"message": message}
+
 @router.post("/login")
 async def login(payload: LoginRequest, request: Request):
+    """
+        用户登录 - 支持密码登录和短信验证码登录
+        1. 密码登录样板：
+        {
+            "login_type": "password",
+            "identifier": "username",
+            "password": "user_password"
+        }
+        2. 短信验证码登录样板：
+        {
+            "login_type": "sms",
+            "identifier": "13800138000",
+            "sms_code": "123456"
+        }
+    """
+    
+    start_time = time.time()
+    
+    # 获取客户端信息
+    ip_address = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "")
+    
+    logger.info(f"🔐 登录请求 - 类型: {payload.login_type}, 标识: {payload.identifier}, IP: {ip_address}")
+    
+    try:
+        # 验证输入
+        if not payload.identifier:
+            logger.warning(f"❌ 登录失败 - 用户标识为空")
+            await log_login_failure("unknown", payload.identifier, "用户标识不能为空", 
+                                   ip_address, user_agent, start_time)
+            raise HTTPException(status_code=400, detail="用户标识不能为空")
+        
+        # 根据登录类型验证必要参数
+        if payload.login_type == "password":
+            if not payload.password:
+                logger.warning(f"❌ 密码登录失败 - 密码为空")
+                await log_login_failure("unknown", payload.identifier, "密码不能为空",
+                                       ip_address, user_agent, start_time)
+                raise HTTPException(status_code=400, detail="密码不能为空")
+        
+        elif payload.login_type == "sms":
+            if not payload.sms_code:
+                logger.warning(f"❌ 短信登录失败 - 验证码为空")
+                await log_login_failure("unknown", payload.identifier, "验证码不能为空",
+                                       ip_address, user_agent, start_time)
+                raise HTTPException(status_code=400, detail="验证码不能为空")
+        
+        else:
+            logger.warning(f"❌ 登录失败 - 不支持的登录类型: {payload.login_type}")
+            await log_login_failure("unknown", payload.identifier, f"不支持的登录类型: {payload.login_type}",
+                                   ip_address, user_agent, start_time)
+            raise HTTPException(status_code=400, detail="不支持的登录类型")
+        
+        # 执行登录认证
+        user = None
+        if payload.login_type == "password":
+            logger.info(f"🔐 开始密码认证: {payload.identifier}")
+            user = await authenticate_by_password(payload.identifier, payload.password)
+        
+        elif payload.login_type == "sms":
+            logger.info(f"📱 开始短信验证码认证: {payload.identifier}")
+            user = await authenticate_by_sms(payload.identifier, payload.sms_code)
+        
+        if not user:
+            logger.warning(f"❌ {payload.login_type}登录失败 - 认证失败: {payload.identifier}")
+            await log_login_failure("unknown", payload.identifier, f"{payload.login_type}认证失败",
+                                   ip_address, user_agent, start_time)
+            raise HTTPException(status_code=401, detail="认证失败")
+        
+        # 检查用户状态
+        if not user.is_active:
+            logger.warning(f"❌ 登录失败 - 用户已禁用: {user.username}")
+            await log_login_failure(str(user.id), user.username, "用户已禁用",
+                                   ip_address, user_agent, start_time)
+            raise HTTPException(status_code=403, detail="用户已被禁用")
+        
+        # 生成 token
+        token = AuthService.create_access_token(sub=user.username)
+        refresh_token = AuthService.create_access_token(sub=user.username, expires_delta=60*60*24*7)
+        
+        # 记录登录成功日志
+        await log_operation(
+            user_id=str(user.id),
+            username=user.username,
+            action_type=ActionType.USER_LOGIN,
+            action=f"用户登录({payload.login_type})",
+            details={
+                "login_type": payload.login_type,
+                "login_method": payload.login_type,
+                "identifier": payload.identifier
+            },
+            success=True,
+            duration_ms=int((time.time() - start_time) * 1000),
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "access_token": token,
+                "refresh_token": refresh_token,
+                "expires_in": 60 * 60,
+                "user": {
+                    "id": str(user.id),
+                    "username": user.username,
+                    "email": user.email,
+                    "phone": user.phone if hasattr(user, 'phone') else "",
+                    "name": user.username,
+                    "is_admin": user.is_admin,
+                    "is_verified": user.is_verified
+                }
+            },
+            "message": "登录成功"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 登录异常: {e}", exc_info=True)
+        await log_operation(
+            user_id="unknown",
+            username=payload.identifier if hasattr(payload, 'identifier') else "unknown",
+            action_type=ActionType.USER_LOGIN,
+            action=f"用户登录({getattr(payload, 'login_type', 'unknown')})",
+            details={"error": str(e)},
+            success=False,
+            error_message=f"系统错误: {str(e)}",
+            duration_ms=int((time.time() - start_time) * 1000),
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+        raise HTTPException(status_code=500, detail="登录过程中发生系统错误")
+
+async def authenticate_by_password(identifier: str, password: str):
+    """密码认证"""
+    try:
+        # 尝试通过用户名认证
+        user = await user_service.authenticate_user(identifier, password)
+        if user:
+            return user
+        
+        # 尝试通过邮箱认证
+        user_by_email = await user_service.get_user_by_email(identifier)
+        if user_by_email:
+            # 验证密码
+            if user_service.verify_password(password, user_by_email.hashed_password):
+                return user_by_email
+        
+        # 尝试通过手机号认证
+        if identifier.isdigit() and len(identifier) == 11:
+            user_by_phone = await user_service.get_user_by_phone(identifier)
+            if user_by_phone:
+                if user_service.verify_password(password, user_by_phone.hashed_password):
+                    return user_by_phone
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ 密码认证异常: {e}")
+        return None
+
+async def authenticate_by_sms(phone: str, sms_code: str):
+    """短信验证码认证"""
+    try:
+        # 验证手机号格式
+        if not phone or len(phone) != 11 or not phone.isdigit():
+            logger.warning(f"❌ 短信登录 - 手机号格式错误: {phone}")
+            return None
+        
+        # 验证短信验证码
+        sms_service = user_service.sms_service
+        is_valid = await sms_service.verify_sms_code(phone, sms_code, "login")
+        
+        if not is_valid:
+            logger.warning(f"❌ 短信登录 - 验证码无效: {phone}")
+            return None
+        
+        # 查找用户
+        user = await user_service.get_user_by_phone(phone)
+        if not user:
+            logger.warning(f"❌ 短信登录 - 用户不存在: {phone}")
+            return None
+        
+        # 更新最后登录时间
+        await user_service.update_last_login(user.username)
+        
+        logger.info(f"✅ 短信登录成功: {phone}")
+        return user
+        
+    except Exception as e:
+        logger.error(f"❌ 短信认证异常: {e}")
+        return None
+
+@router.post("/login-admin")
+async def login2(payload: LoginRequest, request: Request):
     """用户登录"""
     start_time = time.time()
 

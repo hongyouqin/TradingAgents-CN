@@ -2,15 +2,17 @@
 用户服务 - 基于数据库的用户管理
 """
 
+from enum import Enum
 import hashlib
 import time
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from pymongo import MongoClient
 from bson import ObjectId
 
 from app.core.config import settings
-from app.models.user import User, UserCreate, UserUpdate, UserResponse
+from app.models.user import RegistrationError, User, UserCreate, UserUpdate, UserResponse
+from app.services.sms_code_service import SMSCodeService
 
 # 尝试导入日志管理器
 try:
@@ -23,7 +25,6 @@ except ImportError:
 
 logger = get_logger('user_service')
 
-
 class UserService:
     """用户服务类"""
 
@@ -31,6 +32,7 @@ class UserService:
         self.client = MongoClient(settings.MONGO_URI)
         self.db = self.client[settings.MONGO_DB]
         self.users_collection = self.db.users
+        self.sms_service = SMSCodeService()
 
     def close(self):
         """关闭数据库连接"""
@@ -89,7 +91,7 @@ class UserService:
                     # 外观设置
                     "ui_theme": "light",
                     "sidebar_width": 240,
-                    # 语言和地区
+                    # 语言和地区 
                     "language": "zh-CN",
                     # 通知设置
                     "notifications_enabled": True,
@@ -115,6 +117,368 @@ class UserService:
         except Exception as e:
             logger.error(f"❌ 创建用户失败: {e}")
             return None
+    
+    async def create_user_by_phone(self, phone: str, sms_code: str, 
+                                password: str, username: str = None,
+                                email: str = None) -> Tuple[Optional[User], Optional[str], Optional[str]]:
+        """
+        通过手机号+验证码+密码方式注册用户
+        
+        Args:
+            phone: 手机号
+            sms_code: 短信验证码
+            password: 密码
+            username: 可选用户名
+            email: 可选邮箱
+            
+        Returns:
+            Tuple[user, error_type, error_message]
+            - user: 成功时返回User对象，失败时返回None
+            - error_type: 错误类型（RegistrationError枚举）
+            - error_message: 错误描述（中文）
+        """
+        try:
+            logger.info(f"📱 开始手机号注册流程: {phone}")
+            
+            # 1. 验证短信验证码
+            logger.info(f"🔍 验证短信验证码: {sms_code}")
+            is_code_valid, err, sms_info  = await self.sms_service.verify_sms_code(
+                phone=phone,
+                code=sms_code,
+                code_type="register"
+            )
+            
+            if not is_code_valid:
+                error_msg = err
+                logger.warning(f"❌ {error_msg}: {phone}")
+                return None, RegistrationError.SMS_CODE_INVALID, error_msg
+            
+            logger.info(f"✅ 短信验证码验证成功: {phone}, 信息: {sms_info}")
+            
+            # 2. 检查手机号是否已存在
+            logger.info(f"🔍 检查手机号是否已注册: {phone}")
+            existing_phone = self.users_collection.find_one({"phone": phone})
+            if existing_phone:
+                error_msg = "该手机号已注册"
+                logger.warning(f"❌ {error_msg}: {phone}")
+                return None, RegistrationError.PHONE_ALREADY_REGISTERED, error_msg
+            
+            logger.info(f"✅ 手机号可用: {phone}")
+            
+            # 3. 检查用户名是否已存在（如果提供了用户名）
+            if username:
+                logger.info(f"🔍 检查用户名是否已存在: {username}")
+                existing_username = self.users_collection.find_one({"username": username})
+                if existing_username:
+                    error_msg = "用户名已被使用"
+                    logger.warning(f"❌ {error_msg}: {username}")
+                    return None, RegistrationError.USERNAME_ALREADY_EXISTS, error_msg
+                logger.info(f"✅ 用户名可用: {username}")
+            
+            # 4. 检查邮箱是否已存在（如果提供了邮箱）
+            if email:
+                logger.info(f"🔍 检查邮箱是否已存在: {email}")
+                existing_email = self.users_collection.find_one({"email": email})
+                if existing_email:
+                    error_msg = "邮箱已被使用"
+                    logger.warning(f"❌ {error_msg}: {email}")
+                    return None, RegistrationError.EMAIL_ALREADY_EXISTS, error_msg
+                logger.info(f"✅ 邮箱可用: {email}")
+            
+            # 5. 自动生成用户名（如果没有提供）
+            if not username:
+                logger.info(f"🔧 自动生成用户名: {phone}")
+                username = f"user_{phone[-4:]}_{int(time.time()) % 10000}"
+                # 确保用户名唯一
+                attempt = 0
+                max_attempts = 5
+                while self.users_collection.find_one({"username": username}) and attempt < max_attempts:
+                    username = f"user_{phone[-4:]}_{int(time.time()) % 10000 + attempt}"
+                    attempt += 1
+                
+                if attempt >= max_attempts:
+                    error_msg = "生成用户名失败，请稍后重试"
+                    logger.error(f"❌ {error_msg}: {phone}")
+                    return None, RegistrationError.DATABASE_ERROR, error_msg
+                
+                logger.info(f"✅ 用户名生成成功: {username}")
+            
+            # 6. 创建用户文档
+            logger.info(f"📝 创建用户文档: {phone}")
+            user_doc = {
+                "username": username,
+                "email": email or "",
+                "phone": phone,
+                "hashed_password": self.hash_password(password),
+                "is_active": True,
+                "is_verified": True,  # 手机号注册默认证通过
+                "is_admin": False,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+                "last_login": None,
+                "phone_verified": True,  # 标记手机号已验证
+                "email_verified": False,  # 邮箱未验证
+                "preferences": {
+                    "default_market": "A股",
+                    "default_depth": "3",
+                    "default_analysts": ["市场分析师", "基本面分析师"],
+                    "auto_refresh": True,
+                    "refresh_interval": 30,
+                    "ui_theme": "light",
+                    "sidebar_width": 240,
+                    "language": "zh-CN",
+                    "notifications_enabled": True,
+                    "email_notifications": False,
+                    "desktop_notifications": True,
+                    "analysis_complete_notification": True,
+                    "system_maintenance_notification": True,
+                    "sms_notifications": True  # 开启短信通知
+                },
+                "daily_quota": 1000,
+                "concurrent_limit": 3,
+                "total_analyses": 0,
+                "successful_analyses": 0,
+                "failed_analyses": 0,
+                "favorite_stocks": [],
+                "register_type": "phone"  # 标记为手机号注册
+            }
+            
+            # 7. 插入数据库
+            try:
+                result = self.users_collection.insert_one(user_doc)
+                user_doc["_id"] = result.inserted_id
+                
+                logger.info(f"✅ 手机号用户创建成功: {phone}, 用户名: {username}")
+                logger.info(f"   注册方式: 手机号验证")
+                logger.info(f"   用户ID: {result.inserted_id}")
+                
+                return User(**user_doc), None, None
+                
+            except Exception as db_error:
+                error_msg = "数据库操作失败"
+                logger.error(f"❌ {error_msg}: {db_error}")
+                return None, RegistrationError.DATABASE_ERROR, f"{error_msg}: {str(db_error)}"
+            
+        except Exception as e:
+            error_msg = "注册过程中发生未知错误"
+            logger.error(f"❌ {error_msg}: {e}", exc_info=True)
+            return None, RegistrationError.UNKNOWN_ERROR, f"{error_msg}: {str(e)}"
+    
+    async def update_last_login(self, username: str) -> bool:
+        """更新最后登录时间"""
+        try:
+            result = self.users_collection.update_one(
+                {"username": username},
+                {"$set": {"last_login": datetime.utcnow()}}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"❌ 更新最后登录时间失败: {e}")
+            return False
+    
+    async def send_register_sms(self, phone: str) -> Tuple[bool, str]:
+        """
+        发送注册验证码
+        
+        Args:
+            phone: 手机号
+            
+        Returns:
+            (成功状态, 消息)
+        """
+        try:
+            # 1. 验证手机号格式（简单验证）
+            if not phone or len(phone) != 11 or not phone.isdigit():
+                return False, "手机号格式不正确"
+            
+            # # 2. 检查手机号是否已注册
+            # existing_user = self.users_collection.find_one({"phone": phone})
+            # if existing_user:
+            #     return False, "该手机号已注册"
+            
+            # 3. 生成并发送验证码
+            code = await self.sms_service.create_sms_code(
+                phone=phone,
+                code_type="register",
+                expires_in=300  # 5分钟有效期
+            )
+            
+            if not code:
+                return False, "验证码发送失败，请稍后重试"
+            
+            # 4. 模拟发送短信（开发环境）
+            await self.sms_service.send_sms(phone, code)
+            
+            return True, "验证码发送成功"
+            
+        except Exception as e:
+            logger.error(f"❌ 发送注册验证码失败: {e}")
+            return False, "系统错误，请稍后重试"
+        
+    async def authenticate_by_phone(self, phone: str, password: str) -> Optional[User]:
+        """
+        通过手机号+密码认证用户
+        
+        Args:
+            phone: 手机号
+            password: 密码
+            
+        Returns:
+            User对象或None
+        """
+        try:
+            logger.info(f"📱 [authenticate_by_phone] 开始手机号认证: {phone}")
+            
+            # 查找用户
+            user_doc = self.users_collection.find_one({"phone": phone})
+            
+            if not user_doc:
+                logger.warning(f"❌ [authenticate_by_phone] 手机号不存在: {phone}")
+                return None
+            
+            # 验证密码
+            if not self.verify_password(password, user_doc["hashed_password"]):
+                logger.warning(f"❌ [authenticate_by_phone] 密码错误: {phone}")
+                return None
+            
+            # 检查用户是否激活
+            if not user_doc.get("is_active", True):
+                logger.warning(f"❌ [authenticate_by_phone] 用户已禁用: {phone}")
+                return None
+            
+            # 更新最后登录时间
+            self.users_collection.update_one(
+                {"_id": user_doc["_id"]},
+                {"$set": {"last_login": datetime.utcnow()}}
+            )
+            
+            logger.info(f"✅ [authenticate_by_phone] 手机号认证成功: {phone}")
+            return User(**user_doc)
+            
+        except Exception as e:
+            logger.error(f"❌ 手机号认证失败: {e}")
+            return None
+    
+    async def reset_password_by_phone(self, phone: str, sms_code: str, 
+                                    new_password: str) -> Tuple[bool, str]:
+        """
+        通过手机号重置密码
+        
+        Args:
+            phone: 手机号
+            sms_code: 短信验证码
+            new_password: 新密码
+            
+        Returns:
+            (成功状态, 消息)
+        """
+        try:
+            # 1. 验证短信验证码
+            is_code_valid = await self.sms_service.verify_sms_code(
+                phone=phone,
+                code=sms_code,
+                code_type="reset_password"
+            )
+            
+            if not is_code_valid:
+                return False, "验证码无效或已过期"
+            
+            # 2. 查找用户
+            user_doc = self.users_collection.find_one({"phone": phone})
+            if not user_doc:
+                return False, "手机号未注册"
+            
+            # 3. 更新密码
+            new_hashed_password = self.hash_password(new_password)
+            result = self.users_collection.update_one(
+                {"phone": phone},
+                {
+                    "$set": {
+                        "hashed_password": new_hashed_password,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            
+            if result.modified_count > 0:
+                logger.info(f"✅ 手机号密码重置成功: {phone}")
+                return True, "密码重置成功"
+            else:
+                return False, "密码重置失败"
+                
+        except Exception as e:
+            logger.error(f"❌ 手机号密码重置失败: {e}")
+            return False, "系统错误，请稍后重试"
+    
+    async def send_login_sms(self, phone: str) -> Tuple[bool, str]:
+        """
+        发送登录验证码
+        
+        Args:
+            phone: 手机号
+            
+        Returns:
+            (成功状态, 消息)
+        """
+        try:
+            # 1. 检查手机号是否已注册
+            existing_user = self.users_collection.find_one({"phone": phone})
+            if not existing_user:
+                return False, "该手机号未注册"
+            
+            # 2. 生成并发送验证码
+            code = await self.sms_service.create_sms_code(
+                phone=phone,
+                code_type="login",
+                expires_in=300  # 5分钟有效期
+            )
+            
+            if not code:
+                return False, "验证码发送失败，请稍后重试"
+            
+            # 3. 模拟发送短信
+            await self.sms_service.send_sms(phone, code)
+            
+            return True, "验证码发送成功"
+            
+        except Exception as e:
+            logger.error(f"❌ 发送登录验证码失败: {e}")
+            return False, "系统错误，请稍后重试"
+    
+    async def send_reset_password_sms(self, phone: str) -> Tuple[bool, str]:
+        """
+        发送重置密码验证码
+        
+        Args:
+            phone: 手机号
+            
+        Returns:
+            (成功状态, 消息)
+        """
+        try:
+            # 1. 检查手机号是否已注册
+            existing_user = self.users_collection.find_one({"phone": phone})
+            if not existing_user:
+                return False, "该手机号未注册"
+            
+            # 2. 生成并发送验证码
+            code = await self.sms_service.create_sms_code(
+                phone=phone,
+                code_type="reset_password",
+                expires_in=300  # 5分钟有效期
+            )
+            
+            if not code:
+                return False, "验证码发送失败，请稍后重试"
+            
+            # 3. 模拟发送短信
+            await self.sms_service.send_sms(phone, code)
+            
+            return True, "验证码发送成功"
+            
+        except Exception as e:
+            logger.error(f"❌ 发送重置密码验证码失败: {e}")
+            return False, "系统错误，请稍后重试"
     
     async def authenticate_user(self, username: str, password: str) -> Optional[User]:
         """用户认证"""
@@ -179,6 +543,17 @@ class UserService:
                 return None
             
             user_doc = self.users_collection.find_one({"_id": ObjectId(user_id)})
+            if user_doc:
+                return User(**user_doc)
+            return None
+        except Exception as e:
+            logger.error(f"❌ 获取用户失败: {e}")
+            return None
+        
+    async def get_user_by_phone(self, phone: str) -> Optional[User]:
+        """根据手机号获取用户"""
+        try:
+            user_doc = self.users_collection.find_one({"phone": phone})
             if user_doc:
                 return User(**user_doc)
             return None

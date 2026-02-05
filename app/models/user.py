@@ -3,6 +3,7 @@
 """
 
 from datetime import datetime, timezone
+from enum import Enum
 from app.utils.timezone import now_tz
 from typing import Optional, Dict, Any, Annotated, List
 from pydantic import BaseModel, Field, BeforeValidator, PlainSerializer, ConfigDict, field_serializer
@@ -70,11 +71,23 @@ class FavoriteStock(BaseModel):
     alert_price_low: Optional[float] = Field(None, description="价格下限提醒")
 
 
+class RegistrationError(str, Enum):
+    """注册错误类型枚举"""
+    SMS_CODE_INVALID = "sms_code_invalid"
+    PHONE_ALREADY_REGISTERED = "phone_already_registered"
+    USERNAME_ALREADY_EXISTS = "username_already_exists"
+    EMAIL_ALREADY_EXISTS = "email_already_exists"
+    PASSWORD_TOO_WEAK = "password_too_weak"
+    USERNAME_INVALID = "username_invalid"
+    DATABASE_ERROR = "database_error"
+    UNKNOWN_ERROR = "unknown_error"
+
 class User(BaseModel):
     """用户模型"""
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
+    phone: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')
     hashed_password: str
     is_active: bool = True
     is_verified: bool = False

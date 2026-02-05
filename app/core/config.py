@@ -1,6 +1,6 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional
 import os
 import warnings
 
@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     MONGO_CONNECT_TIMEOUT_MS: int = Field(default=30000)  # 连接超时：30秒（原为10秒）
     MONGO_SOCKET_TIMEOUT_MS: int = Field(default=60000)   # 套接字超时：60秒（原为20秒）
     MONGO_SERVER_SELECTION_TIMEOUT_MS: int = Field(default=5000)  # 服务器选择超时：5秒
+    
+    # 阿里云短信RAMKey配置
+    SMS_ACCESS_KEY_ID: Optional[str] = Field(default= os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID'), description="阿里云短信服务 Access Key ID")
+    SMS_ACCESS_KEY_SECRET: Optional[str] = Field(default= os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET'), description="阿里云短信服务 Access Key Secret")
+    
 
     @property
     def MONGO_URI(self) -> str:

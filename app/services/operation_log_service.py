@@ -4,6 +4,7 @@
 
 import logging
 from datetime import datetime, timedelta
+import time
 from typing import Dict, Any, List, Optional, Tuple
 from bson import ObjectId
 
@@ -282,3 +283,20 @@ async def log_operation(
         session_id=session_id
     )
     return await service.create_log(user_id, username, log_data, ip_address, user_agent)
+
+
+async def log_login_failure(user_id: str, identifier: str, reason: str, 
+                           ip_address: str, user_agent: str, start_time: float):
+    """记录登录失败日志"""
+    await log_operation(
+        user_id=user_id,
+        username=identifier,
+        action_type=ActionType.USER_LOGIN,
+        action="用户登录",
+        details={"reason": reason},
+        success=False,
+        error_message=reason,
+        duration_ms=int((time.time() - start_time) * 1000),
+        ip_address=ip_address,
+        user_agent=user_agent
+    )
