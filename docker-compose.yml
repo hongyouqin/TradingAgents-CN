@@ -1,7 +1,7 @@
 version: '3.8'
 
 # TradingAgents-CN v1.0.0-preview Docker Compose配置
-# 支持前后端分离部署
+# 后端服务部署
 
 services:
   # FastAPI 后端服务
@@ -39,7 +39,7 @@ services:
       # API配置
       API_HOST: "0.0.0.0"
       API_PORT: "8000"
-      # CORS配置
+      # CORS配置（根据实际前端访问地址配置）
       CORS_ORIGINS: "http://localhost:3000,http://localhost:8080,http://localhost:5173"
     depends_on:
       mongodb:
@@ -54,37 +54,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
-
-  # Vue 3 前端服务
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    image: tradingagents-frontend:v1.0.0-preview
-    container_name: tradingagents-frontend
-    ports:
-      - "3000:80"
-    environment:
-      TZ: "Asia/Shanghai"
-      # 后端API地址
-      VITE_API_BASE_URL: "http://localhost:8000"
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - tradingagents-network
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -205,4 +174,3 @@ networks:
   tradingagents-network:
     driver: bridge
     name: tradingagents-network
-
