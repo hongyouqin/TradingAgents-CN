@@ -18,6 +18,8 @@ class SMSCodeService:
         self.client = MongoClient(settings.MONGO_URI)
         self.db = self.client[settings.MONGO_DB]
         self.sms_codes_collection = self.db.sms_codes
+        self.sms_key = settings.SMS_ACCESS_KEY_ID
+        self.sms_secret = settings.SMS_ACCESS_KEY_SECRET
     
     @staticmethod
     def timestamp_to_datetime(timestamp: float) -> datetime:
@@ -39,7 +41,7 @@ class SMSCodeService:
         return ''.join([str(random.randint(0, 9)) for _ in range(length)])
     
     async def create_sms_code(self, phone: str, code_type: str = "register", 
-                            expires_in: int = 3600) -> Optional[Tuple[str, float]]:
+                            expires_in: int = 300) -> Optional[Tuple[str, float]]:
         """
         创建短信验证码
         
@@ -214,8 +216,8 @@ class SMSCodeService:
             logger.info(f"📱 发送短信验证码: {phone}, 验证码: {code}")
             
             # 获取阿里云配置
-            access_key_id = os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
-            access_key_secret = os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+            access_key_id = self.sms_key
+            access_key_secret = self.sms_secret 
             
             if not access_key_id or not access_key_secret:
                 logger.warning("⚠️ 阿里云AK未配置，模拟发送短信")

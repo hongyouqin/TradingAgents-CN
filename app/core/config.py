@@ -42,9 +42,22 @@ class Settings(BaseSettings):
     MONGO_SERVER_SELECTION_TIMEOUT_MS: int = Field(default=5000)  # 服务器选择超时：5秒
     
     # 阿里云短信RAMKey配置
-    SMS_ACCESS_KEY_ID: Optional[str] = Field(default= os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID'), description="阿里云短信服务 Access Key ID")
-    SMS_ACCESS_KEY_SECRET: Optional[str] = Field(default= os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET'), description="阿里云短信服务 Access Key Secret")
+    _sms_access_key_id: Optional[str] = None
+    _sms_access_key_secret: Optional[str] = None
     
+    @property
+    def SMS_ACCESS_KEY_ID(self) -> Optional[str]:
+        """延迟加载 Access Key ID"""
+        if self._sms_access_key_id is None:
+            self._sms_access_key_id = os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
+        return self._sms_access_key_id
+    
+    @property
+    def SMS_ACCESS_KEY_SECRET(self) -> Optional[str]:
+        """延迟加载 Access Key Secret"""
+        if self._sms_access_key_secret is None:
+            self._sms_access_key_secret = os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+        return self._sms_access_key_secret
 
     @property
     def MONGO_URI(self) -> str:

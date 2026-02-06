@@ -174,6 +174,60 @@ class ChangePasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     username: str
     new_password: str
+    
+class ResetPasswordByPhoneRequest(BaseModel):
+    phone: str = Field(
+        ...,
+        min_length=11,
+        max_length=11,
+        pattern=r'^1[3-9]\d{9}$',
+        description="手机号，11位数字，以1开头",
+        example="13800138000"
+    )
+    
+    sms_code: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        pattern=r'^\d{6}$',
+        description="6位数字短信验证码",
+        example="123456"
+    )
+    
+    new_password: str = Field(
+        ...,
+        min_length=8,
+        max_length=50,
+        description="密码，至少8个字符",
+        example="StrongPass123!"
+    )
+    
+    @validator('phone')
+    def validate_phone_format(cls, v):
+        """验证手机号格式"""
+        if not re.match(r'^1[3-9]\d{9}$', v):
+            raise ValueError('手机号格式不正确，必须是11位数字，以1开头')
+        return v
+    
+    @validator('new_password')
+    def validate_password_strength(cls, v):
+        """验证密码强度"""
+        if len(v) < 8:
+            raise ValueError('密码至少需要8个字符')
+        
+        # 检查是否包含数字
+        if not re.search(r'\d', v):
+            raise ValueError('密码必须包含至少一个数字')
+        
+        # 检查是否包含字母
+        if not re.search(r'[a-zA-Z]', v):
+            raise ValueError('密码必须包含至少一个字母')
+        
+        # 可选：检查特殊字符
+        # if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
+        #     raise ValueError('密码必须包含至少一个特殊字符')
+        
+        return v
 
 class CreateUserRequest(BaseModel):
     username: str
@@ -231,6 +285,11 @@ async def get_current_user(authorization: Optional[str] = Header(default=None)) 
 
 @router.post("/send-sms")
 async def send_sms(request: SMSRequest):
+    '''
+        发送短信验证码
+        sms_type: register, reset_password, login
+    '''
+    
     if request.sms_type == "register":
         success, message = await user_service.send_register_sms(request.phone)
     elif request.sms_type == "reset_password":
@@ -397,7 +456,7 @@ async def register_by_phone(request: PhoneRegisterRequest):
         )
 
 @router.post("/reset-password-by-phone")
-async def reset_password_by_phone(request: ResetPasswordRequest):
+async def reset_password_by_phone(request: ResetPasswordByPhoneRequest):
     '''
         通过手机号重置密码
     '''
