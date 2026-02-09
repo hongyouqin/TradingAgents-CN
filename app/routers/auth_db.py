@@ -43,6 +43,10 @@ class LoginRequest(BaseModel):
     password: Optional[str] = Field(None, description="密码（密码登录时必填）")
     sms_code: Optional[str] = Field(None, description="短信验证码（短信登录时必填）")
     
+class LoginOldRequest(BaseModel):
+    username: str
+    password: str
+
 class SMSRequest(BaseModel):
     phone: str
     sms_type: str = "register"  # register, reset_password, login
@@ -668,7 +672,7 @@ async def authenticate_by_sms(phone: str, sms_code: str):
         return None
 
 @router.post("/login-admin")
-async def login2(payload: LoginRequest, request: Request):
+async def login2(payload: LoginOldRequest, request: Request):
     """用户登录"""
     start_time = time.time()
 
