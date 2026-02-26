@@ -145,33 +145,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  # Vue 3前端服务
-  frontend:
-    # 支持本地构建或从Docker Hub拉取
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    image: hsliup/tradingagents-frontend:latest
-    container_name: tradingagents-frontend
-    restart: unless-stopped
-    expose:
-      - "80"
-    environment:
-      TZ: "Asia/Shanghai"
-      # 前端通过 Nginx 代理访问后端，使用相对路径
-      VITE_API_BASE_URL: "/api"
-    depends_on:
-      - backend
-    networks:
-      - tradingagents-network
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
   # Nginx 反向代理
   # ports可以改为8080:80,或者其它的端口映射，前面一个是外部的端口，后面一个是容器内的端口
   nginx:
