@@ -306,7 +306,7 @@ async def send_sms(request: SMSRequest):
     if not success:
         raise HTTPException(status_code=400, detail=message)
     
-    return {"message": message}
+    return {"message": message, 'success': success}
 
 from fastapi import HTTPException
 from typing import Dict, Any
@@ -473,7 +473,7 @@ async def reset_password_by_phone(request: ResetPasswordByPhoneRequest):
     if not success:
         raise HTTPException(status_code=400, detail=message)
     
-    return {"message": message}
+    return {"message": message, 'success': success}
 
 @router.post("/login")
 async def login(payload: LoginRequest, request: Request):
