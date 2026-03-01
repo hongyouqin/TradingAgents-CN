@@ -174,5 +174,6 @@ volumes:
 
 networks:
   tradingagents-network:
-    driver: bridge
+    external: true  # 使用已存在的网络
+    name: tradingagents-network  # 指定网络名称
 

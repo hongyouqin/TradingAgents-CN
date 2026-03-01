@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     MONGO_SOCKET_TIMEOUT_MS: int = Field(default=60000)   # 套接字超时：60秒（原为20秒）
     MONGO_SERVER_SELECTION_TIMEOUT_MS: int = Field(default=5000)  # 服务器选择超时：5秒
     
+    # 微信支付配置
+    # ⚠️ 注意：默认值仅供测试使用，生产环境请务必替换为实际的商户信息，并妥善保管API密钥等敏感信息
+    WECHAT_APP_ID: str = Field(default="")
+    WECHAT_MCH_ID: str = Field(default="")
+    WECHAT_API_KEY: str = Field(default="")
+    WECHAT_NOTIFY_URL: str = Field(default="https://rehearsable-lineable-esperanza.ngrok-free.dev/api/payment/wxpay/notify")
+    
     # 阿里云短信RAMKey配置
     _sms_access_key_id: Optional[str] = None
     _sms_access_key_secret: Optional[str] = None
