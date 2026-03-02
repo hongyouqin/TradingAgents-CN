@@ -8,6 +8,7 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, validator
 
 from app.services.auth_service import AuthService
@@ -27,6 +28,8 @@ except ImportError:
         return logging.getLogger(name)
 
 logger = get_logger('auth_db')
+
+security = HTTPBearer(auto_error=False) 
 
 # 统一响应格式
 class ApiResponse(BaseModel):
@@ -238,54 +241,69 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str
     is_admin: bool = False
+    
+async def get_current_user(
+        credentials: HTTPAuthorizationCredentials = Depends(security)
+    ) -> dict:
+        """获取当前用户信息（使用 FastAPI 安全依赖）"""
+        logger.debug(f"🔐 认证检查开始")
         
-async def get_current_user(authorization: Optional[str] = Header(default=None)) -> dict:
-    """获取当前用户信息"""
-    logger.debug(f"🔐 认证检查开始")
-    logger.debug(f"📋 Authorization header: {authorization[:50] if authorization else 'None'}...")
+        # 检查是否有 credentials
+        if not credentials:
+            logger.warning("❌ 没有Authorization header")
+            raise HTTPException(
+                status_code=401,
+                detail="No authorization header",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # credentials 已经包含了 Bearer 前缀的处理
+        token = credentials.credentials
+        logger.debug(f"🎫 提取的token长度: {len(token)}")
+        logger.debug(f"🎫 Token前20位: {token[:20]}...")
 
-    if not authorization:
-        logger.warning("❌ 没有Authorization header")
-        raise HTTPException(status_code=401, detail="No authorization header")
+        token_data = AuthService.verify_token(token)
+        logger.debug(f"🔍 Token验证结果: {token_data is not None}")
 
-    if not authorization.lower().startswith("bearer "):
-        logger.warning(f"❌ Authorization header格式错误: {authorization[:20]}...")
-        raise HTTPException(status_code=401, detail="Invalid authorization format")
+        if not token_data:
+            logger.warning("❌ Token验证失败")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    token = authorization.split(" ", 1)[1]
-    logger.debug(f"🎫 提取的token长度: {len(token)}")
-    logger.debug(f"🎫 Token前20位: {token[:20]}...")
+        # 从数据库获取用户信息
+        user = await user_service.get_user_by_username(token_data.sub)
+        if not user:
+            logger.warning(f"❌ 用户不存在: {token_data.sub}")
+            raise HTTPException(
+                status_code=401,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    token_data = AuthService.verify_token(token)
-    logger.debug(f"🔍 Token验证结果: {token_data is not None}")
+        if not user.is_active:
+            logger.warning(f"❌ 用户已禁用: {token_data.sub}")
+            raise HTTPException(
+                status_code=401,
+                detail="User is inactive",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    if not token_data:
-        logger.warning("❌ Token验证失败")
-        raise HTTPException(status_code=401, detail="Invalid token")
+        logger.debug(f"✅ 认证成功，用户: {token_data.sub}")
 
-    # 从数据库获取用户信息
-    user = await user_service.get_user_by_username(token_data.sub)
-    if not user:
-        logger.warning(f"❌ 用户不存在: {token_data.sub}")
-        raise HTTPException(status_code=401, detail="User not found")
-
-    if not user.is_active:
-        logger.warning(f"❌ 用户已禁用: {token_data.sub}")
-        raise HTTPException(status_code=401, detail="User is inactive")
-
-    logger.debug(f"✅ 认证成功，用户: {token_data.sub}")
-
-    # 返回完整的用户信息，包括偏好设置
-    return {
-        "id": str(user.id),
-        "username": user.username,
-        "email": user.email,
-        "name": user.username,
-        "is_admin": user.is_admin,
-        "roles": ["admin"] if user.is_admin else ["user"],
-        "preferences": user.preferences.model_dump() if user.preferences else {}
-    }
-
+        # 返回完整的用户信息，包括偏好设置
+        return {
+            "id": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "name": user.username,
+            "is_admin": user.is_admin,
+            "roles": ["admin"] if user.is_admin else ["user"],
+            "preferences": user.preferences.model_dump() if user.preferences else {}
+        }
+        
 
 @router.post("/send-sms")
 async def send_sms(request: SMSRequest):
