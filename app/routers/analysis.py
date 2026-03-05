@@ -4,6 +4,7 @@
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -35,6 +36,24 @@ class BatchAnalyzeRequest(BaseModel):
     parameters: dict = Field(default_factory=dict)
     title: str = Field(default="批量分析", description="批次标题")
     description: Optional[str] = Field(None, description="批次描述")
+
+# 获取简化报告
+@router.get("/{analysis_id}/simplified")
+async def get_simplified_report_endpoint(analysis_id: str):
+    service = get_simple_analysis_service()
+    report = await service.get_simplified_report(analysis_id)  # 只查询
+    if report:
+        return report
+    return {"message": "简化报告不存在"}
+
+# 前端直接获取简化报告的HTML内容，适用于直接展示在页面上
+@router.get("/{analysis_id}/simplified/html")
+async def get_simplified_report_html_endpoint(analysis_id: str):
+    service = get_simple_analysis_service()
+    html = await service.get_simplified_report_html(analysis_id)  # 只查询
+    if html:
+        return HTMLResponse(content=html)
+    return HTMLResponse(content="<h1>报告不存在</h1>", status_code=404)
 
 # 新版API端点
 @router.post("/single", response_model=Dict[str, Any])

@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import sys
 
+
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -32,6 +33,7 @@ from app.services.config_service import ConfigService
 from app.services.memory_state_manager import get_memory_state_manager, TaskStatus
 from app.services.redis_progress_tracker import RedisProgressTracker, get_progress_by_id
 from app.services.progress_log_handler import register_analysis_tracker, unregister_analysis_tracker
+from app.services.report_simplifier import get_report_simplifier, SimplifiedReportRequest
 
 # 股票基础信息获取（用于补充显示名称）
 try:
@@ -806,7 +808,329 @@ class SimpleAnalysisService:
             logger.error(f"❌ 创建分析任务失败: {e}")
             raise
 
+
     async def execute_analysis_background(
+        self,
+        task_id: str,
+        user_id: str,
+        request: SingleAnalysisRequest
+    ):
+        """在后台执行分析任务（修复版）"""
+        # 🔧 使用 get_symbol() 方法获取股票代码（兼容 symbol 和 stock_code 字段）
+        stock_code = request.get_symbol()
+        progress_tracker = None
+        
+        # 添加最外层的异常捕获，确保所有异常都被记录
+        try:
+            logger.info(f"🎯🎯🎯 [ENTRY] execute_analysis_background 方法被调用: {task_id}")
+            logger.info(f"🎯🎯🎯 [ENTRY] user_id={user_id}, stock_code={stock_code}")
+            
+            # 🔍 验证股票代码是否存在
+            logger.info(f"🔍 开始验证股票代码: {stock_code}")
+            from tradingagents.utils.stock_validator import prepare_stock_data_async
+            from datetime import datetime
+
+            # 获取市场类型
+            market_type = request.parameters.market_type if request.parameters else "A股"
+
+            # 获取分析日期并转换为字符串格式
+            analysis_date = request.parameters.analysis_date if request.parameters else None
+            if analysis_date:
+                if isinstance(analysis_date, datetime):
+                    analysis_date = analysis_date.strftime('%Y-%m-%d')
+                elif isinstance(analysis_date, str):
+                    try:
+                        parsed_date = datetime.strptime(analysis_date, '%Y-%m-%d')
+                        analysis_date = parsed_date.strftime('%Y-%m-%d')
+                    except ValueError:
+                        analysis_date = datetime.now().strftime('%Y-%m-%d')
+                        logger.warning(f"⚠️ 分析日期格式不正确，使用今天: {analysis_date}")
+
+            # 🔥 使用异步验证，避免线程切换
+            validation_result = await prepare_stock_data_async(
+                stock_code=stock_code,
+                market_type=market_type,
+                period_days=30,
+                analysis_date=analysis_date
+            )
+
+            if not validation_result.is_valid:
+                error_msg = f"❌ 股票代码验证失败: {validation_result.error_message}"
+                logger.error(error_msg)
+                
+                # 构建用户友好的错误消息
+                user_friendly_error = (
+                    f"❌ 股票代码无效\n\n"
+                    f"{validation_result.error_message}\n\n"
+                    f"💡 {validation_result.suggestion}"
+                )
+
+                # 更新任务状态为失败
+                await self.memory_manager.update_task_status(
+                    task_id=task_id,
+                    status=AnalysisStatus.FAILED,
+                    progress=0,
+                    error_message=user_friendly_error
+                )
+
+                # 更新MongoDB状态
+                await self._update_task_status(
+                    task_id,
+                    AnalysisStatus.FAILED,
+                    0,
+                    error_message=user_friendly_error
+                )
+
+                return
+
+            logger.info(f"✅ 股票代码验证通过: {stock_code} - {validation_result.stock_name}")
+            
+            # ========== 进度跟踪器创建（异步化改造） ==========
+            try:
+                # 🔥 直接异步创建进度跟踪器，避免线程切换
+                logger.info(f"📊 创建进度跟踪器: {task_id}")
+                progress_tracker = RedisProgressTracker(
+                    task_id=task_id,
+                    analysts=request.parameters.selected_analysts or ["market", "fundamentals"],
+                    research_depth=request.parameters.research_depth or "标准",
+                    llm_provider="dashscope"
+                )
+                self._progress_trackers[task_id] = progress_tracker
+                register_analysis_tracker(task_id, progress_tracker)
+                
+                # 初始化进度（异步友好的方式）
+                await asyncio.get_event_loop().run_in_executor(
+                    None,  # 使用默认线程池
+                    progress_tracker.update_progress,
+                    {
+                        "progress_percentage": 10,
+                        "last_message": "🚀 开始股票分析"
+                    }
+                )
+            except Exception as tracker_err:
+                logger.error(f"❌ 创建进度跟踪器失败: {tracker_err}", exc_info=True)
+                # 进度跟踪器创建失败不中断核心分析流程
+                user_friendly_error = f"进度跟踪初始化失败: {str(tracker_err)[:100]}"
+                await self.memory_manager.update_task_status(
+                    task_id=task_id,
+                    status=AnalysisStatus.FAILED,
+                    progress=0,
+                    error_message=user_friendly_error
+                )
+                await self._update_task_status(task_id, AnalysisStatus.FAILED, 0, user_friendly_error)
+                return
+
+            # ========== 状态更新（统一异步操作） ==========
+            # 更新状态为运行中
+            await self.memory_manager.update_task_status(
+                task_id=task_id,
+                status=TaskStatus.RUNNING,
+                progress=10,
+                message="分析开始...",
+                current_step="initialization"
+            )
+            await self._update_task_status(task_id, AnalysisStatus.PROCESSING, 10)
+
+            # 数据准备阶段
+            if progress_tracker:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    progress_tracker.update_progress,
+                    {
+                        "progress_percentage": 20,
+                        "last_message": "🔧 检查环境配置"
+                    }
+                )
+            
+            await self.memory_manager.update_task_status(
+                task_id=task_id,
+                status=TaskStatus.RUNNING,
+                progress=20,
+                message="准备分析数据...",
+                current_step="data_preparation"
+            )
+            await self._update_task_status(task_id, AnalysisStatus.PROCESSING, 20)
+
+            # ========== 核心分析执行（优化线程池使用） ==========
+            logger.info("🚀 开始执行核心分析逻辑")
+            try:
+                # 🔥 使用共享线程池执行同步分析，避免重复创建
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    self._thread_pool,
+                    self._run_analysis_sync,
+                    task_id,
+                    user_id,
+                    request,
+                    progress_tracker
+                )
+                logger.info("✅ 核心分析逻辑执行完成")
+            except Exception as analysis_err:
+                logger.error(f"❌ 核心分析执行失败: {analysis_err}", exc_info=True)
+                # 格式化错误信息
+                from ..utils.error_formatter import ErrorFormatter
+                error_context = {}
+                if request and hasattr(request, 'parameters') and request.parameters:
+                    if hasattr(request.parameters, 'quick_model'):
+                        error_context['model'] = request.parameters.quick_model
+                
+                formatted_error = ErrorFormatter.format_error(str(analysis_err), error_context)
+                user_friendly_error = (
+                    f"{formatted_error['title']}\n\n"
+                    f"{formatted_error['message']}\n\n"
+                    f"💡 {formatted_error['suggestion']}"
+                )
+                
+                # 标记失败状态
+                if progress_tracker:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        progress_tracker.mark_failed,
+                        user_friendly_error
+                    )
+                
+                await self.memory_manager.update_task_status(
+                    task_id=task_id,
+                    status=TaskStatus.FAILED,
+                    progress=0,
+                    message="分析失败",
+                    current_step="failed",
+                    error_message=user_friendly_error
+                )
+                await self._update_task_status(task_id, AnalysisStatus.FAILED, 0, user_friendly_error)
+                return
+
+            # ========== 分析完成后处理 ==========
+            # 标记进度跟踪器完成
+            if progress_tracker:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    progress_tracker.mark_completed
+                )
+
+            # 保存原始分析结果
+            try:
+                logger.info(f"💾 开始保存原始分析结果: {task_id}")
+                await self._save_analysis_results_complete(task_id, result)
+                logger.info(f"✅ 原始分析结果保存完成: {task_id}")
+            except Exception as save_error:
+                logger.error(f"❌ 保存原始分析结果失败: {task_id} - {save_error}", exc_info=True)
+
+            # 生成简化报告
+            try:
+                logger.info(f"🔄 开始生成简化报告: {task_id}")
+                await self._update_progress_async(task_id, 90, "🎨 生成老板版简化报告")
+                
+                # 准备原始内容
+                original_content = {
+                    "symbol": stock_code,
+                    "stock_name": validation_result.stock_name,
+                    "summary": result.get("summary", ""),
+                    "recommendation": result.get("recommendation", ""),
+                    "confidence_score": result.get("confidence_score", 0.0),
+                    "risk_level": result.get("risk_level", "中等"),
+                    "key_points": result.get("key_points", []),
+                    "detailed_analysis": result.get("detailed_analysis", {}),
+                    "decision": result.get("decision", {}),
+                    "reports": result.get("reports", {}),
+                    "model_info": result.get("model_info", "Unknown"),
+                    "execution_time": result.get("execution_time", 0)
+                }
+                
+                # 生成简化报告
+                simplified_report = await self._generate_simplified_report_async(
+                    analysis_id=task_id,
+                    stock_code=stock_code,
+                    stock_name=validation_result.stock_name,
+                    original_content=original_content
+                )
+                
+                # 将简化报告添加到结果中
+                result["simplified_report"] = {
+                    "executive_summary": simplified_report.executive_summary,
+                    "decision_points": simplified_report.decision_points,
+                    "core_review": simplified_report.core_review,
+                    "risk_analysis": simplified_report.risk_analysis,
+                    "short_term_outlook": simplified_report.short_term_outlook,
+                    "action_items": simplified_report.action_items,
+                    "golden_quote": simplified_report.golden_quote,
+                    "html_content": simplified_report.html_content,
+                    "compression_ratio": simplified_report.compression_ratio
+                }
+                
+                logger.info(f"✅ 简化报告生成完成: {task_id}")
+                
+            except Exception as simplify_err:
+                logger.error(f"❌ 生成简化报告失败: {simplify_err}", exc_info=True)
+                result["simplified_report_error"] = str(simplify_err)
+
+            # 更新最终状态
+            await self.memory_manager.update_task_status(
+                task_id=task_id,
+                status=TaskStatus.COMPLETED,
+                progress=100,
+                message="分析完成（含简化报告）",
+                current_step="completed",
+                result_data=result
+            )
+            await self._update_task_status(task_id, AnalysisStatus.COMPLETED, 100)
+
+            # 创建完成通知
+            try:
+                from app.services.notifications_service import get_notifications_service
+                svc = get_notifications_service()
+                summary = str(result.get("summary", ""))[:120]
+                await svc.create_and_publish(
+                    payload=NotificationCreate(
+                        user_id=str(user_id),
+                        type='analysis',
+                        title=f"{request.stock_code} 分析完成（含老板版）",
+                        content=summary,
+                        link=f"/stocks/{request.stock_code}",
+                        source='analysis'
+                    )
+                )
+            except Exception as notif_err:
+                logger.warning(f"⚠️ 创建通知失败(忽略): {notif_err}")
+
+            logger.info(f"✅ 后台分析任务全部完成: {task_id}")
+
+        except Exception as e:
+            # 终极异常捕获
+            logger.error(f"❌ 后台分析任务顶级异常: {e}", exc_info=True)
+            
+            # 确保任务状态被正确更新为失败
+            user_friendly_error = f"分析任务执行异常: {str(e)[:200]}"
+            try:
+                if progress_tracker:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        progress_tracker.mark_failed,
+                        user_friendly_error
+                    )
+                
+                await self.memory_manager.update_task_status(
+                    task_id=task_id,
+                    status=TaskStatus.FAILED,
+                    progress=0,
+                    message="分析失败",
+                    current_step="failed",
+                    error_message=user_friendly_error
+                )
+                await self._update_task_status(task_id, AnalysisStatus.FAILED, 0, user_friendly_error)
+            except Exception as status_err:
+                logger.error(f"❌ 更新失败状态时出错: {status_err}", exc_info=True)
+                
+        finally:
+            # 确保资源被清理
+            if task_id in self._progress_trackers:
+                del self._progress_trackers[task_id]
+            unregister_analysis_tracker(task_id)
+            
+            # 🔧 优雅关闭线程池（可选，根据业务场景）
+            # self._thread_pool.shutdown(wait=False)
+
+    async def execute_analysis_background2(
         self,
         task_id: str,
         user_id: str,
@@ -964,13 +1288,13 @@ class SimpleAnalysisService:
             # 标记进度跟踪器完成（在线程中执行）
             await asyncio.to_thread(progress_tracker.mark_completed)
 
-            # 保存分析结果到文件和数据库
+            # 保存原始分析结果到文件和数据库
             try:
-                logger.info(f"💾 开始保存分析结果: {task_id}")
+                logger.info(f"💾 开始保存原始分析结果: {task_id}")
                 await self._save_analysis_results_complete(task_id, result)
-                logger.info(f"✅ 分析结果保存完成: {task_id}")
+                logger.info(f"✅ 原始分析结果保存完成: {task_id}")
             except Exception as save_error:
-                logger.error(f"❌ 保存分析结果失败: {task_id} - {save_error}")
+                logger.error(f"❌ 保存原始分析结果失败: {task_id} - {save_error}")
                 # 保存失败不影响分析完成状态
 
             # 🔍 调试：检查即将保存到内存的result
@@ -979,12 +1303,63 @@ class SimpleAnalysisService:
             if result.get('decision'):
                 logger.info(f"🔍 [DEBUG] 即将保存的decision内容: {result['decision']}")
 
-            # 更新状态为完成
+            # ========== 第2步：生成简化报告（等待完成）==========
+            try:
+                logger.info(f"🔄 开始生成简化报告: {task_id}")
+                
+                # 更新进度
+                await self._update_progress_async(task_id, 90, "🎨 生成老板版简化报告")
+                
+                # 准备原始内容（从result中提取关键信息）
+                original_content = {
+                    "symbol": stock_code,
+                    "stock_name": validation_result.stock_name,
+                    "summary": result.get("summary", ""),
+                    "recommendation": result.get("recommendation", ""),
+                    "confidence_score": result.get("confidence_score", 0.0),
+                    "risk_level": result.get("risk_level", "中等"),
+                    "key_points": result.get("key_points", []),
+                    "detailed_analysis": result.get("detailed_analysis", {}),
+                    "decision": result.get("decision", {}),
+                    "reports": result.get("reports", {}),
+                    "model_info": result.get("model_info", "Unknown"),
+                    "execution_time": result.get("execution_time", 0)
+                }
+                
+                # 调用简化报告生成器（等待完成）
+                simplified_report = await self._generate_simplified_report_async(
+                    analysis_id=task_id,
+                    stock_code=stock_code,
+                    stock_name=validation_result.stock_name,
+                    original_content=original_content
+                )
+                
+                # 将简化报告也添加到result中，方便返回
+                result["simplified_report"] = {
+                    "executive_summary": simplified_report.executive_summary,
+                    "decision_points": simplified_report.decision_points,
+                    "core_review": simplified_report.core_review,
+                    "risk_analysis": simplified_report.risk_analysis,
+                    "short_term_outlook": simplified_report.short_term_outlook,
+                    "action_items": simplified_report.action_items,
+                    "golden_quote": simplified_report.golden_quote,
+                    "html_content": simplified_report.html_content,
+                    "compression_ratio": simplified_report.compression_ratio
+                }
+                
+                logger.info(f"✅ 简化报告生成完成: {task_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ 生成简化报告失败: {e}")
+                # 不影响主流程，但记录错误
+                result["simplified_report_error"] = str(e)
+
+            # 更新状态为完成（现在包含简化报告）
             await self.memory_manager.update_task_status(
                 task_id=task_id,
                 status=TaskStatus.COMPLETED,
                 progress=100,
-                message="分析完成",
+                message="分析完成（含简化报告）",
                 current_step="completed",
                 result_data=result
             )
@@ -992,7 +1367,7 @@ class SimpleAnalysisService:
             # 同步更新MongoDB状态为完成
             await self._update_task_status(task_id, AnalysisStatus.COMPLETED, 100)
 
-            # 创建通知：分析完成（方案B：REST+SSE）
+            # 创建通知：分析完成
             try:
                 from app.services.notifications_service import get_notifications_service
                 svc = get_notifications_service()
@@ -1001,7 +1376,7 @@ class SimpleAnalysisService:
                     payload=NotificationCreate(
                         user_id=str(user_id),
                         type='analysis',
-                        title=f"{request.stock_code} 分析完成",
+                        title=f"{request.stock_code} 分析完成（含老板版）",
                         content=summary,
                         link=f"/stocks/{request.stock_code}",
                         source='analysis'
@@ -1010,7 +1385,7 @@ class SimpleAnalysisService:
             except Exception as notif_err:
                 logger.warning(f"⚠️ 创建通知失败(忽略): {notif_err}")
 
-            logger.info(f"✅ 后台分析任务完成: {task_id}")
+            logger.info(f"✅ 后台分析任务完成（含简化报告）: {task_id}")
 
         except Exception as e:
             logger.error(f"❌ 后台分析任务失败: {task_id} - {e}")
@@ -1059,6 +1434,135 @@ class SimpleAnalysisService:
 
             # 从日志监控中注销
             unregister_analysis_tracker(task_id)
+            
+
+    async def _generate_simplified_report_async(
+        self, 
+        analysis_id: str, 
+        stock_code: str,
+        stock_name: str,
+        original_content: Dict[str, Any]
+    ) -> Any:
+        """异步生成简化报告（等待完成并返回结果）"""
+        try:
+            logger.info(f"🔄 开始生成简化报告: {analysis_id} - {stock_code}")
+            
+            # 获取简化报告服务实例
+            simplifier = get_report_simplifier()
+            
+            # 创建请求
+            request = SimplifiedReportRequest(
+                analysis_id=analysis_id,
+                original_content=original_content,
+                max_length=1500,
+                language="zh-CN"
+            )
+            
+            # 生成简化报告（等待完成）
+            simplified_report = await simplifier.simplify_report(request)
+            
+            # 更新任务元数据，标记简化报告已生成
+            await self._mark_simplified_report_ready(analysis_id, simplified_report)
+            
+            logger.info(f"✅ 简化报告生成完成: {analysis_id}, 压缩比例: {simplified_report.compression_ratio:.2%}")
+            
+            return simplified_report
+            
+        except Exception as e:
+            logger.error(f"❌ 生成简化报告失败: {analysis_id} - {e}")
+            raise
+
+    async def _mark_simplified_report_ready(self, analysis_id: str, simplified_report):
+        """标记简化报告已就绪"""
+        try:
+            db = get_mongo_db()
+            
+            # 更新 analysis_tasks 中的元数据
+            await db.analysis_tasks.update_one(
+                {"task_id": analysis_id},
+                {
+                    "$set": {
+                        "has_simplified_report": True,
+                        "simplified_report_generated_at": datetime.utcnow(),
+                        "simplified_report_summary": simplified_report.executive_summary,
+                        "simplified_report_golden_quote": simplified_report.golden_quote
+                    }
+                }
+            )
+            
+            # 同时更新内存中的任务状态
+            await self.memory_manager.update_task_metadata(
+                task_id=analysis_id,
+                metadata={
+                    "has_simplified_report": True,
+                    "simplified_report_generated_at": datetime.utcnow().isoformat(),
+                    "simplified_report_summary": simplified_report.executive_summary
+                }
+            )
+            
+            logger.info(f"✅ 已标记简化报告就绪: {analysis_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ 标记简化报告就绪失败: {analysis_id} - {e}")
+    
+    async def get_simplified_report(self, analysis_id: str) -> Optional[Dict[str, Any]]:
+        """获取简化报告"""
+        try:
+            simplifier = get_report_simplifier()
+            report = await simplifier.get_simplified_report(analysis_id)
+            
+            if report:
+                return report.to_dict()
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ 获取简化报告失败: {analysis_id} - {e}")
+            return None
+
+    async def get_simplified_report_html(self, analysis_id: str) -> Optional[str]:
+        """获取简化报告的HTML内容"""
+        try:
+            simplifier = get_report_simplifier()
+            report = await simplifier.get_simplified_report(analysis_id)
+            
+            if report:
+                return report.html_content
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ 获取简化报告HTML失败: {analysis_id} - {e}")
+            return None
+
+    async def check_simplified_report_status(self, analysis_id: str) -> Dict[str, Any]:
+        """检查简化报告生成状态"""
+        try:
+            db = get_mongo_db()
+            task = await db.analysis_tasks.find_one(
+                {"task_id": analysis_id},
+                {"has_simplified_report": 1, "simplified_report_generated_at": 1}
+            )
+            
+            if task:
+                return {
+                    "analysis_id": analysis_id,
+                    "has_simplified_report": task.get("has_simplified_report", False),
+                    "generated_at": task.get("simplified_report_generated_at")
+                }
+            
+            return {
+                "analysis_id": analysis_id,
+                "has_simplified_report": False,
+                "generated_at": None
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 检查简化报告状态失败: {analysis_id} - {e}")
+            return {
+                "analysis_id": analysis_id,
+                "has_simplified_report": False,
+                "generated_at": None,
+                "error": str(e)
+            }
 
     async def _execute_analysis_sync(
         self,
@@ -1845,6 +2349,8 @@ class SimpleAnalysisService:
 
             # 抛出包含友好错误信息的异常
             raise Exception(user_friendly_error) from e
+
+
 
     async def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """获取任务状态"""

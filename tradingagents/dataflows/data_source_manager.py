@@ -1146,7 +1146,8 @@ class DataSourceManager:
                               })
 
                 # 数据质量异常时也尝试降级到其他数据源
-                fallback_result = self._try_fallback_sources(symbol, start_date, end_date)
+                fallback_result_tuple = self._try_fallback_sources(symbol, start_date, end_date)
+                fallback_result = self._extract_result_from_tuple(fallback_result_tuple)
                 if fallback_result and "❌" not in fallback_result and "错误" not in fallback_result:
                     logger.info(f"✅ [数据来源: 备用数据源] 降级成功获取数据: {symbol}")
                     return fallback_result
@@ -1414,6 +1415,26 @@ class DataSourceManager:
         except Exception as e:
             logger.error(f"❌ 获取成交量失败: {e}")
             return 0
+    
+    def _extract_result_from_tuple(self, result_tuple: tuple) -> str:
+        """
+        从备用数据源返回的元组中提取完整的结果字符串
+        """
+        if result_tuple is None:
+            return ""
+        
+        if isinstance(result_tuple, tuple) and len(result_tuple) > 0:
+            result = result_tuple[0]
+            if isinstance(result, str):
+                # 🔥 确保返回完整的字符串，不做任何截断
+                logger.info(f"🔍 [提取] 原始字符串长度: {len(result)}")
+                return result
+            else:
+                str_result = str(result)
+                logger.info(f"🔍 [提取] 转换后字符串长度: {len(str_result)}")
+                return str_result
+        
+        return str(result_tuple) if result_tuple else ""
 
     def _try_fallback_sources(self, symbol: str, start_date: str, end_date: str, period: str = "daily") -> tuple[str, str | None]:
         """

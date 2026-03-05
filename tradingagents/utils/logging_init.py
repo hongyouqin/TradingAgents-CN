@@ -30,7 +30,7 @@ def init_logging(config_override: Optional[dict] = None) -> None:
     logger = get_logger('tradingagents.init')
     
     # 记录初始化信息
-    logger.info("🚀 TradingAgents-CN 日志系统初始化完成")
+    logger.info("🚀 FinAgents日志系统初始化完成")
     logger.info(f"📁 日志目录: {logger_manager.config.get('handlers', {}).get('file', {}).get('directory', 'N/A')}")
     logger.info(f"📊 日志级别: {logger_manager.config.get('level', 'INFO')}")
     
