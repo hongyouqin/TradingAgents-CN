@@ -8,7 +8,7 @@ import uuid
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Set
 from pathlib import Path
 import sys
 
@@ -35,13 +35,12 @@ from app.services.queue_service import QueueService
 from app.core.database import get_redis_client
 from app.services.redis_progress_tracker import RedisProgressTracker
 from app.services.config_provider import provider as config_provider
-from app.services.queue import DEFAULT_USER_CONCURRENT_LIMIT, GLOBAL_CONCURRENT_LIMIT, VISIBILITY_TIMEOUT_SECONDS
+from app.services.task_queue import DEFAULT_USER_CONCURRENT_LIMIT, GLOBAL_CONCURRENT_LIMIT, VISIBILITY_TIMEOUT_SECONDS
 from app.services.usage_statistics_service import UsageStatisticsService
 from app.models.config import UsageRecord
 
 import logging
 logger = logging.getLogger(__name__)
-
 
 class AnalysisService:
     """股票分析服务类"""

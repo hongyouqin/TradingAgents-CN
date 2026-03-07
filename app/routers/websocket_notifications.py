@@ -115,58 +115,60 @@ async def websocket_notifications_endpoint(
     WebSocket 通知端点
     
     客户端连接: ws://localhost:8000/api/ws/notifications?token=<jwt_token>
-    
-    消息格式:
-    {
-        "type": "notification",  // 消息类型: notification, heartbeat, connected
-        "data": {
-            "id": "...",
-            "title": "...",
-            "content": "...",
-            "type": "analysis",
-            "link": "/stocks/000001",
-            "source": "analysis",
-            "created_at": "2025-10-23T12:00:00",
-            "status": "unread"
-        }
-    }
     """
-    # 验证 token
-    token_data = AuthService.verify_token(token)
-    if not token_data:
-        await websocket.close(code=1008, reason="Unauthorized")
-        return
-    
-    user_id = "admin"  # 从 token_data 中获取
-    
-    # 连接 WebSocket
-    await manager.connect(websocket, user_id)
-    
-    # 发送连接确认
-    await websocket.send_json({
-        "type": "connected",
-        "data": {
-            "user_id": user_id,
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": "WebSocket 连接成功"
-        }
-    })
-    
+    connection_id = None
     try:
+        # 验证 token
+        token_data = AuthService.verify_token(token)
+        if not token_data:
+            logger.warning(f"❌ [WS] 认证失败: token无效")
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+        
+        user_id = token_data.get("sub", "admin")  # 从 token_data 中获取用户ID
+        connection_id = f"{user_id}_{id(websocket)}"
+        
+        # 接受 WebSocket 连接
+        await websocket.accept()
+        logger.info(f"🔌 [WS] 新连接: {connection_id}")
+        
+        # 连接 WebSocket
+        await manager.connect(websocket, user_id)
+        
+        # 发送连接确认
+        try:
+            await websocket.send_json({
+                "type": "connected",
+                "data": {
+                    "user_id": user_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "message": "WebSocket 连接成功"
+                }
+            })
+            logger.info(f"✅ [WS] 连接确认已发送: {connection_id}")
+        except Exception as e:
+            logger.error(f"❌ [WS] 发送连接确认失败: {connection_id}, 错误: {e}")
+            raise
+        
         # 心跳任务
         async def send_heartbeat():
-            while True:
-                try:
-                    await asyncio.sleep(30)  # 每 30 秒发送一次心跳
-                    await websocket.send_json({
-                        "type": "heartbeat",
-                        "data": {
-                            "timestamp": datetime.utcnow().isoformat()
-                        }
-                    })
-                except Exception as e:
-                    logger.debug(f"💓 [WS] 心跳发送失败: {e}")
-                    break
+            try:
+                while True:
+                    await asyncio.sleep(30)
+                    try:
+                        await websocket.send_json({
+                            "type": "heartbeat",
+                            "data": {
+                                "timestamp": datetime.utcnow().isoformat()
+                            }
+                        })
+                        logger.debug(f"💓 [WS] 心跳发送成功: {connection_id}")
+                    except Exception as e:
+                        logger.debug(f"💓 [WS] 心跳发送失败: {connection_id}, 错误: {e}")
+                        break
+            except asyncio.CancelledError:
+                logger.debug(f"🛑 [WS] 心跳任务被取消: {connection_id}")
+                raise
         
         # 启动心跳任务
         heartbeat_task = asyncio.create_task(send_heartbeat())
@@ -174,17 +176,43 @@ async def websocket_notifications_endpoint(
         # 接收客户端消息（主要用于保持连接）
         while True:
             try:
-                data = await websocket.receive_text()
-                # 可以处理客户端发送的消息（如 ping/pong）
-                logger.debug(f"📥 [WS] 收到客户端消息: user={user_id}, data={data}")
-            except WebSocketDisconnect:
-                logger.info(f"🔌 [WS] 客户端主动断开: user={user_id}")
+                # 使用 wait_for 添加超时，避免永久阻塞
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+                logger.debug(f"📥 [WS] 收到客户端消息: {connection_id}, data={data[:100] if data else ''}")
+                
+                # 处理心跳响应
+                if data == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    
+            except asyncio.TimeoutError:
+                # 超时是正常的，继续循环
+                logger.debug(f"⏱️ [WS] 接收超时: {connection_id}")
+                continue
+                
+            except WebSocketDisconnect as e:
+                logger.info(f"🔌 [WS] 客户端主动断开: {connection_id}, code={e.code}")
                 break
+                
+            except asyncio.CancelledError:
+                logger.info(f"🛑 [WS] 连接任务被取消: {connection_id}")
+                raise
+                
             except Exception as e:
-                logger.error(f"❌ [WS] 接收消息错误: {e}")
+                logger.error(f"❌ [WS] 接收消息错误: {connection_id}, 错误: {type(e).__name__}: {e}")
                 break
     
+    except asyncio.CancelledError:
+        logger.info(f"🛑 [WS] WebSocket 端点被取消: {connection_id}")
+        # 重新抛出，让上层处理
+        raise
+        
+    except Exception as e:
+        logger.error(f"❌ [WS] WebSocket 端点异常: {connection_id}, 错误: {type(e).__name__}: {e}", exc_info=True)
+        
     finally:
+        # 确保资源被清理
+        logger.info(f"🧹 [WS] 清理连接: {connection_id}")
+        
         # 取消心跳任务
         if 'heartbeat_task' in locals():
             heartbeat_task.cancel()
@@ -192,10 +220,24 @@ async def websocket_notifications_endpoint(
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                logger.error(f"❌ [WS] 取消心跳任务失败: {e}")
         
         # 断开连接
-        await manager.disconnect(websocket, user_id)
-
+        try:
+            if 'user_id' in locals():
+                await manager.disconnect(websocket, user_id)
+                logger.info(f"✅ [WS] 连接已从管理器移除: {connection_id}")
+        except Exception as e:
+            logger.error(f"❌ [WS] 从管理器断开连接失败: {e}")
+        
+        # 关闭 WebSocket
+        try:
+            await websocket.close()
+        except:
+            pass
+        
+        logger.info(f"✅ [WS] 连接清理完成: {connection_id}")
 
 @router.websocket("/ws/tasks/{task_id}")
 async def websocket_task_progress_endpoint(

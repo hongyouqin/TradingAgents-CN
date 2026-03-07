@@ -940,7 +940,7 @@ class ConfigService:
             elif provider_str == "deepseek":
                 # DeepSeek 使用专门的测试方法
                 logger.info(f"🔍 使用 DeepSeek 专用测试方法")
-                result = self._test_deepseek_api(api_key, f"{provider_str} {llm_config.model_name}", llm_config.model_name)
+                result = self._test_deepseek_api(api_key, f"{provider_str} {llm_config.model_name}", llm_config.model_name, api_base)
                 result["response_time"] = time.time() - start_time
                 return result
             elif provider_str == "dashscope":
@@ -3543,7 +3543,7 @@ class ConfigService:
                 "message": f"{display_name} API测试异常: {str(e)}"
             }
 
-    def _test_deepseek_api(self, api_key: str, display_name: str, model_name: str = None) -> dict:
+    def _test_deepseek_api(self, api_key: str, display_name: str, model_name: str = None, api_base: str = None) -> dict:
         """测试DeepSeek API"""
         try:
             import requests
@@ -3553,9 +3553,21 @@ class ConfigService:
                 model_name = "deepseek-chat"
                 logger.info(f"⚠️ 未指定模型，使用默认模型: {model_name}")
 
-            logger.info(f"🔍 [DeepSeek 测试] 使用模型: {model_name}")
+            # 确定API基础URL
+            if api_base:
+                # 使用传入的api_base
+                api_base = api_base.rstrip('/')
+                # 处理版本号
+                if not api_base.endswith('/v1'):
+                    api_base = api_base + '/v1'
+                url = f"{api_base}/chat/completions"
+                logger.info(f"🔍 [DeepSeek 测试] 使用自定义API地址: {url}")
+            else:
+                # 使用默认的DeepSeek官方地址
+                url = "https://api.deepseek.com/v1/chat/completions"
+                logger.info(f"🔍 [DeepSeek 测试] 使用官方API地址: {url}")
 
-            url = "https://api.deepseek.com/chat/completions"
+            logger.info(f"🔍 [DeepSeek 测试] 使用模型: {model_name}")
 
             headers = {
                 "Content-Type": "application/json",
@@ -3571,7 +3583,13 @@ class ConfigService:
                 "temperature": 0.1
             }
 
+            logger.info(f"📤 [DeepSeek 测试] 请求头: {headers}")
+            logger.info(f"📤 [DeepSeek 测试] 请求数据: {data}")
+            
             response = requests.post(url, json=data, headers=headers, timeout=10)
+            
+            logger.info(f"📥 [DeepSeek 测试] 响应状态: {response.status_code}")
+            logger.info(f"📥 [DeepSeek 测试] 响应内容: {response.text}")
 
             if response.status_code == 200:
                 result = response.json()
@@ -3580,28 +3598,43 @@ class ConfigService:
                     if content and len(content.strip()) > 0:
                         return {
                             "success": True,
-                            "message": f"{display_name} API连接测试成功"
+                            "message": f"{display_name} API连接测试成功",
+                            "details": {
+                                "url": url,
+                                "response_preview": content[:100]
+                            }
                         }
                     else:
                         return {
                             "success": False,
-                            "message": f"{display_name} API响应为空"
+                            "message": f"{display_name} API响应为空",
+                            "details": {"url": url}
                         }
                 else:
                     return {
                         "success": False,
-                        "message": f"{display_name} API响应格式异常"
+                        "message": f"{display_name} API响应格式异常",
+                        "details": {"url": url, "response": result}
                     }
             else:
+                error_msg = f"{display_name} API测试失败: HTTP {response.status_code}"
+                try:
+                    error_detail = response.json()
+                    error_msg += f" - {error_detail}"
+                except:
+                    pass
                 return {
                     "success": False,
-                    "message": f"{display_name} API测试失败: HTTP {response.status_code}"
+                    "message": error_msg,
+                    "details": {"url": url}
                 }
 
         except Exception as e:
+            logger.error(f"❌ [DeepSeek 测试] 异常: {e}", exc_info=True)
             return {
                 "success": False,
-                "message": f"{display_name} API测试异常: {str(e)}"
+                "message": f"{display_name} API测试异常: {str(e)}",
+                "details": {"url": url if 'url' in locals() else None}
             }
 
     def _test_dashscope_api(self, api_key: str, display_name: str, model_name: str = None) -> dict:

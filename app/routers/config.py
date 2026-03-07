@@ -843,12 +843,25 @@ async def add_database_config(
         )
 
 
+
 @router.post("/test", response_model=ConfigTestResponse)
 async def test_config(
     request: ConfigTestRequest,
     current_user: User = Depends(get_current_user)
 ):
-    """测试配置连接"""
+    """
+        测试配置连接
+        1. 测试llm参数格式：
+        {
+            "config_type": "llm",
+            "config_data": {
+                "provider": "deepseek",
+                "model_name": "deepseek-chat/deepseek-v3.2",
+                "api_key": "sk-nxFqeQQ1r4euqs2VtN2EN5xmCuxMxxxx",
+                "api_base": "https://api.qingyuntop.top/v1"
+            }
+        }
+    """
     try:
         if request.config_type == "llm":
             llm_config = LLMConfig(**request.config_data)

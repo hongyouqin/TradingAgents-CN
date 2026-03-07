@@ -1703,6 +1703,13 @@ class DataSourceManager:
         logger.error(f"❌ 所有数据源都无法获取{symbol}的股票信息")
         return {'symbol': symbol, 'name': f'股票{symbol}', 'source': 'unknown'}
 
+    def _get_tushare_stock_info(self, symbol: str) -> Dict:
+            from .interface import get_china_stock_info_tushare
+            info_str = get_china_stock_info_tushare(symbol)
+            result = self._parse_stock_info_string(info_str, symbol)
+            return result
+        
+
     def _get_akshare_stock_info(self, symbol: str) -> Dict:
         """使用AKShare获取股票基本信息
 

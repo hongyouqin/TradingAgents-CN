@@ -6,7 +6,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from datetime import datetime
 import logging
 import time
@@ -25,6 +25,34 @@ from app.models.analysis import (
 
 router = APIRouter()
 logger = logging.getLogger("webapi")
+
+# 存储所有后台任务引用
+_background_tasks: Set[asyncio.Task] = set()
+# 存储任务元数据
+_task_metadata: Dict[str, Dict[str, Any]] = {}
+
+def _cleanup_task(task: asyncio.Task):
+    """任务完成后的清理函数"""
+    try:
+        # 从集合中移除
+        _background_tasks.discard(task)
+        
+        # 获取任务ID（如果存储在任务对象中）
+        task_id = getattr(task, "_task_id", "unknown")
+        
+        # 检查任务是否有异常
+        if not task.cancelled() and task.exception():
+            exc = task.exception()
+            logger.error(f"❌ 任务 {task_id} 异常: {exc}")
+        
+        logger.debug(f"🧹 任务清理完成，剩余后台任务: {len(_background_tasks)}")
+        
+        # 清理元数据（可选，保留一段时间）
+        if task_id in _task_metadata:
+            _task_metadata[task_id]["end_time"] = datetime.utcnow().isoformat()
+            
+    except Exception as e:
+        logger.error(f"❌ 清理任务时出错: {e}")
 
 # 兼容性：保留原有的请求模型
 class SingleAnalyzeRequest(BaseModel):
@@ -55,7 +83,39 @@ async def get_simplified_report_html_endpoint(analysis_id: str):
         return HTMLResponse(content=html)
     return HTMLResponse(content="<h1>报告不存在</h1>", status_code=404)
 
-# 新版API端点
+@router.post("/single_test", response_model=Dict[str, Any])
+async def submit_single_analysis_test(
+    request: SingleAnalysisRequest,
+    user: dict = Depends(get_current_user)
+):
+    """提交单股分析任务"""
+    try:
+        # 创建任务
+        analysis_service = get_simple_analysis_service()
+        result = await analysis_service.create_analysis_task(user["id"], request)
+        task_id = result["task_id"]
+        
+        # 直接执行（等待完成）
+        await analysis_service.execute_analysis_background(
+            task_id,
+            user["id"],
+            request
+        )
+        
+        # 获取结果
+        status = await analysis_service.get_task_status(task_id)
+        
+        return {
+            "success": True,
+            "data": status,
+            "message": "分析任务已完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ 执行失败: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+# 新版API端点,这个版本在提交分析任务时会立即返回，并在后台执行分析，用户可以通过查询接口获取状态和结果，但是在windows会崩溃，还不知道具体原因
 @router.post("/single", response_model=Dict[str, Any])
 async def submit_single_analysis(
     request: SingleAnalysisRequest,
@@ -112,6 +172,38 @@ async def submit_single_analysis(
     except Exception as e:
         logger.error(f"❌ 提交单股分析任务失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/tasks/status")
+async def get_tasks_status():
+    """获取所有后台任务状态"""
+    return {
+        "total_running": len(_background_tasks),
+        "tasks": [
+            {
+                "task_id": tid,
+                "status": meta.get("status"),
+                "symbol": meta.get("symbol"),
+                "start_time": meta.get("start_time"),
+                "end_time": meta.get("end_time")
+            }
+            for tid, meta in list(_task_metadata.items())[-10:]  # 最近10个任务
+        ]
+    }
+
+@router.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """获取指定任务的状态"""
+    if task_id in _task_metadata:
+        return _task_metadata[task_id]
+    
+    # 如果不在内存中，从服务查询
+    analysis_service = get_simple_analysis_service()
+    status = await analysis_service.get_task_status(task_id)
+    
+    if status:
+        return status
+    
+    raise HTTPException(status_code=404, detail="任务不存在")
 
 
 # 测试路由 - 验证路由是否被正确注册

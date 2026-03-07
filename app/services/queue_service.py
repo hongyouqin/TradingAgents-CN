@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 
 from app.core.database import get_redis_client
 
-from app.services.queue import (
+from app.services.task_queue import (
     READY_LIST,
     TASK_PREFIX,
     BATCH_PREFIX,

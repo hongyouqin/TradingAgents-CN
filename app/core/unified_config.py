@@ -239,13 +239,13 @@ class UnifiedConfigManager:
         """获取快速分析模型"""
         settings = self.get_system_settings()
         # 优先读取新字段名，如果不存在则读取旧字段名（向后兼容）
-        return settings.get("quick_analysis_model") or settings.get("quick_think_llm", "qwen-turbo")
+        return settings.get("quick_analysis_model") or settings.get("quick_think_llm", "deepseek-v3.2")
 
     def get_deep_analysis_model(self) -> str:
         """获取深度分析模型"""
         settings = self.get_system_settings()
         # 优先读取新字段名，如果不存在则读取旧字段名（向后兼容）
-        return settings.get("deep_analysis_model") or settings.get("deep_think_llm", "qwen-max")
+        return settings.get("deep_analysis_model") or settings.get("deep_think_llm", "deepseek-v3.2")
 
     def set_analysis_models(self, quick_model: str, deep_model: str) -> bool:
         """设置分析模型"""

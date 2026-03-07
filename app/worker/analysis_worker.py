@@ -24,7 +24,7 @@ from app.core.redis_client import init_redis, close_redis
 from app.core.config import settings
 from app.models.analysis import AnalysisTask, AnalysisParameters
 from app.services.config_provider import provider as config_provider
-from app.services.queue import DEFAULT_USER_CONCURRENT_LIMIT, GLOBAL_CONCURRENT_LIMIT, VISIBILITY_TIMEOUT_SECONDS
+from app.services.task_queue import DEFAULT_USER_CONCURRENT_LIMIT, GLOBAL_CONCURRENT_LIMIT, VISIBILITY_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
