@@ -1186,14 +1186,14 @@ class SimpleAnalysisService:
             )
             
             # 同时更新内存中的任务状态
-            await self.memory_manager.update_task_metadata(
-                task_id=analysis_id,
-                metadata={
-                    "has_simplified_report": True,
-                    "simplified_report_generated_at": datetime.utcnow().isoformat(),
-                    "simplified_report_summary": simplified_report.executive_summary
-                }
-            )
+            # await self.memory_manager.update_task_metadata(
+            #     task_id=analysis_id,
+            #     metadata={
+            #         "has_simplified_report": True,
+            #         "simplified_report_generated_at": datetime.utcnow().isoformat(),
+            #         "simplified_report_summary": simplified_report.executive_summary
+            #     }
+            # )
             
             logger.info(f"✅ 已标记简化报告就绪: {analysis_id}")
             

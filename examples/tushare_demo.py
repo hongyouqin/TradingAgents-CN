@@ -6,15 +6,35 @@ Tushare数据源演示脚本
 
 import os
 import sys
-from datetime import datetime, timedelta
 
-# 导入日志模块
-from tradingagents.utils.logging_manager import get_logger
-logger = get_logger('default')
-
-# 添加项目根目录到Python路径
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ========== 第一步：先添加项目根目录到Python路径（必须在导入前） ==========
+# 获取当前文件的绝对路径
+current_file = os.path.abspath(__file__)
+# 获取当前文件所在目录
+current_dir = os.path.dirname(current_file)
+# 获取项目根目录（当前目录的上一级）
+project_root = os.path.dirname(current_dir)
+# 将项目根目录添加到Python搜索路径的最前面
 sys.path.insert(0, project_root)
+
+# ========== 第二步：现在可以正常导入模块了 ==========
+try:
+    from tradingagents.utils.logging_manager import get_logger
+    from datetime import datetime, timedelta
+    # 导入日志模块
+    from tradingagents.utils.logging_manager import get_logger
+    logger = get_logger('default')
+except ImportError as e:
+    print(f"❌ 导入模块失败: {e}")
+    print(f"🔍 项目根目录: {project_root}")
+    print(f"🔍 Python搜索路径: {sys.path[:5]}")  # 打印前5个路径排查
+    sys.exit(1)
+
+
+
+# # 添加项目根目录到Python路径
+# project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# sys.path.insert(0, project_root)
 
 
 def demo_basic_usage():
@@ -75,6 +95,13 @@ def demo_basic_usage():
         import traceback
         traceback.print_exc()
 
+
+def demo_interface_test():
+    from tradingagents.dataflows.data_source_manager import (
+            get_china_stock_info_tushare
+        )
+    result= get_china_stock_info_tushare(ticker= '002407')
+    logger.info(f"接口测试结果: {result}")
 
 def demo_interface_functions():
     """演示接口函数"""
@@ -270,22 +297,24 @@ def main():
     logger.info(f"本演示将展示Tushare数据源的各种功能")
     logger.info(f"=")
     
-    # 检查环境
-    if not check_environment():
-        logger.error(f"\n❌ 环境配置不完整，请先配置Tushare环境")
-        return
+    # # 检查环境
+    # if not check_environment():
+    #     logger.error(f"\n❌ 环境配置不完整，请先配置Tushare环境")
+    #     return
     
-    # 运行演示
-    demo_basic_usage()
-    demo_interface_functions()
-    demo_batch_operations()
-    demo_cache_performance()
+    demo_interface_test()
     
-    logger.info(f"\n🎉 Tushare演示完成！")
-    logger.info(f"\n📚 更多信息:")
-    logger.info(f"   - 文档: docs/data/tushare-integration.md")
-    logger.info(f"   - 测试: tests/test_tushare_integration.py")
-    logger.info(f"   - 配置: config/tushare_config.example.env")
+    # # 运行演示
+    # demo_basic_usage()
+    # demo_interface_functions()
+    # demo_batch_operations()
+    # demo_cache_performance()
+    
+    # logger.info(f"\n🎉 Tushare演示完成！")
+    # logger.info(f"\n📚 更多信息:")
+    # logger.info(f"   - 文档: docs/data/tushare-integration.md")
+    # logger.info(f"   - 测试: tests/test_tushare_integration.py")
+    # logger.info(f"   - 配置: config/tushare_config.example.env")
     
     input("\n按回车键退出...")
 

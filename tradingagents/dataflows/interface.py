@@ -1,3 +1,5 @@
+import asyncio
+from functools import lru_cache
 from typing import Annotated, Dict
 import time
 import os
@@ -1440,45 +1442,66 @@ def get_china_stock_data_tushare(
         return f"❌ 获取{ticker}股票数据失败: {e}"
 
 
+@lru_cache(maxsize=1000)
 def get_china_stock_info_tushare(
     ticker: Annotated[str, "中国股票代码，如：000001、600036等"]
 ) -> str:
     """
     使用Tushare获取中国A股基本信息
-    直接调用 Tushare 适配器，避免循环调用
-
-    Args:
-        ticker: 股票代码
-
-    Returns:
-        str: 格式化的股票基本信息
+    修复：访问嵌套的market_info中的交易所信息
     """
     try:
         from .data_source_manager import get_data_source_manager
 
         logger.debug(f"📊 [Tushare] 获取{ticker}股票信息...")
         logger.info(f"🔍 [股票代码追踪] get_china_stock_info_tushare 接收到的股票代码: '{ticker}' (类型: {type(ticker)})")
-        logger.info(f"🔍 [股票代码追踪] 直接调用 Tushare 适配器")
 
+        # 获取管理器和适配器实例
         manager = get_data_source_manager()
+        adapter = manager._get_tushare_adapter()
+        
+        # 同步调用异步函数
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            future = asyncio.create_task(adapter.get_stock_basic_info(symbol=ticker))
+            info_dict = loop.run_until_complete(future)
+        else:
+            info_dict = loop.run_until_complete(adapter.get_stock_basic_info(symbol=ticker))
 
-        # 🔥 直接调用 _get_tushare_stock_info()，避免循环调用
-        # 不要调用 get_stock_info()，因为它会再次调用 get_china_stock_info_tushare()
-        info = manager._get_tushare_stock_info(ticker)
+        # 调试：打印原始字典（上线后可注释）
+        logger.info(f"📝 {ticker} 原始返回字典: {info_dict}")
+        if info_dict:
+            logger.info(f"🔑 字典字段: {list(info_dict.keys())}")
 
-        # 格式化返回字符串
-        if info and isinstance(info, dict):
-            return f"""股票代码: {info.get('symbol', ticker)}
-股票名称: {info.get('name', '未知')}
-所属行业: {info.get('industry', '未知')}
-上市日期: {info.get('list_date', '未知')}
-交易所: {info.get('exchange', '未知')}"""
+        # 格式化返回（核心修复：访问嵌套的market_info）
+        if info_dict and isinstance(info_dict, dict):
+            # 🔥 修复：从market_info字典中获取交易所信息
+            # 优先取中文名称 exchange_name，备用取 exchange 缩写并映射
+            market_info = info_dict.get('market_info', {})  # 先拿到嵌套字典
+            exchange_name = market_info.get('exchange_name', '')  # 深圳证券交易所
+            exchange = market_info.get('exchange', '')  # SZSE
+            
+            # 最终交易所名称（有中文用中文，没有则映射缩写）
+            final_exchange = exchange_name if exchange_name else {
+                'SZSE': '深交所',
+                'SSE': '上交所',
+                'BSE': '北交所',
+                'SZ': '深交所',
+                'SH': '上交所',
+                'BJ': '北交所'
+            }.get(exchange, '未知')
+
+            return f"""股票代码: {info_dict.get('symbol', ticker)}
+股票名称: {info_dict.get('name', '未知')}
+所属行业: {info_dict.get('industry', '未知')}
+上市日期: {info_dict.get('list_date', '未知')}
+交易所: {final_exchange}"""
         else:
             return f"❌ 未找到{ticker}的股票信息"
 
     except Exception as e:
-        logger.error(f"❌ [Tushare] 获取股票信息失败: {e}")
-        return f"❌ 获取{ticker}股票信息失败: {e}"
+        logger.error(f"❌ [Tushare] 获取股票信息失败: {e}", exc_info=True)
+        return f"❌ 获取{ticker}股票信息失败: {str(e)}"
 
 
 def get_china_stock_fundamentals_tushare(

@@ -25,6 +25,7 @@ logger = setup_dataflow_logging()
 
 # 导入统一数据源编码
 from tradingagents.constants import DataSourceCode
+from .interface import get_china_stock_info_tushare
 
 def run_async_safe(coroutine):
     """
@@ -1560,7 +1561,6 @@ class DataSourceManager:
         # 首先尝试当前数据源
         try:
             if self.current_source == ChinaDataSource.TUSHARE:
-                from .interface import get_china_stock_info_tushare
                 info_str = get_china_stock_info_tushare(symbol)
                 result = self._parse_stock_info_string(info_str, symbol)
 
@@ -1670,7 +1670,7 @@ class DataSourceManager:
                 # 根据数据源类型获取股票信息
                 if source == ChinaDataSource.TUSHARE:
                     # 🔥 直接调用 Tushare 适配器，避免循环调用
-                    result = self._get_tushare_stock_info(symbol)
+                    result = self._get_tushare_stock_info(symbol=symbol)
                 elif source == ChinaDataSource.AKSHARE:
                     result = self._get_akshare_stock_info(symbol)
                 elif source == ChinaDataSource.BAOSTOCK:
@@ -1704,10 +1704,9 @@ class DataSourceManager:
         return {'symbol': symbol, 'name': f'股票{symbol}', 'source': 'unknown'}
 
     def _get_tushare_stock_info(self, symbol: str) -> Dict:
-            from .interface import get_china_stock_info_tushare
-            info_str = get_china_stock_info_tushare(symbol)
-            result = self._parse_stock_info_string(info_str, symbol)
-            return result
+        info_str = get_china_stock_info_tushare(symbol)
+        result = self._parse_stock_info_string(info_str, symbol)
+        return result
         
 
     def _get_akshare_stock_info(self, symbol: str) -> Dict:

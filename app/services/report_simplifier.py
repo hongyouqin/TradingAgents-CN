@@ -1,5 +1,3 @@
-# app/services/report_simplifier.py
-
 """
 报告精简服务 - 将详细股票分析报告转化为老板易懂的精简汇报
 生成符合"超级大脑"风格的HTML页面
@@ -8,6 +6,7 @@
 import json
 import logging
 import asyncio
+import os
 import sys
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -95,7 +94,7 @@ class ReportSimplifier:
     def __init__(self):
         self._cache = {}
         self._prompt_template = self._load_prompt_template()
-        self._html_template = self._load_html_template()
+        self._html_generation_prompt = self._load_html_generation_prompt()
         logger.info("✅ ReportSimplifier 初始化完成")
     
     def _load_prompt_template(self) -> str:
@@ -143,519 +142,106 @@ class ReportSimplifier:
 
 确保返回的是有效的JSON格式，不要包含任何其他文字说明。"""
     
-    def _load_html_template(self) -> str:
-        """加载HTML模板"""
-        return """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>超级大脑 · {stock_code} 分析汇报</title>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    <style>
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
-        
-        body {{
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: #f8faff;
-            color: #1e293b;
-            line-height: 1.6;
-            font-size: 18px;
-        }}
-        
-        .container {{
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 24px 20px 40px;
-        }}
-        
-        /* 头部 */
-        .header {{
-            margin-bottom: 32px;
-            text-align: center;
-        }}
-        
-        .header h1 {{
-            font-family: 'Poppins', sans-serif;
-            font-size: 42px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            margin-bottom: 8px;
-            letter-spacing: -0.5px;
-        }}
-        
-        .header .date {{
-            font-size: 18px;
-            color: #64748b;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }}
-        
-        .header .date span {{
-            background: #e6f0ff;
-            padding: 4px 12px;
-            border-radius: 20px;
-            color: #1e3c72;
-            font-weight: 500;
-            font-size: 16px;
-        }}
-        
-        .stock-badge {{
-            background: #1e3c72;
-            color: white !important;
-        }}
-        
-        /* 执行摘要卡片 */
-        .executive-summary {{
-            background: linear-gradient(135deg, #1e3c72 0%, #29539b 100%);
-            border-radius: 28px;
-            padding: 28px 24px;
-            margin-bottom: 28px;
-            color: white;
-            box-shadow: 0 20px 30px -10px rgba(30, 60, 114, 0.3);
-        }}
-        
-        .executive-summary h2 {{
-            font-family: 'Poppins', sans-serif;
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            opacity: 0.9;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }}
-        
-        .executive-summary p {{
-            font-size: 24px;
-            font-weight: 500;
-            line-height: 1.4;
-            margin: 0;
-        }}
-        
-        /* 通用卡片样式 */
-        .card {{
-            background: white;
-            border-radius: 24px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
-            border: 1px solid rgba(30, 60, 114, 0.08);
-        }}
-        
-        .card-title {{
-            font-family: 'Poppins', sans-serif;
-            font-size: 20px;
-            font-weight: 600;
-            color: #1e3c72;
-            margin-bottom: 18px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            border-bottom: 2px solid #eef2f6;
-            padding-bottom: 12px;
-        }}
-        
-        .card-title i {{
-            color: #2a5298;
-            font-style: normal;
-            font-size: 24px;
-        }}
-        
-        /* 决策点列表 */
-        .decision-list {{
-            list-style: none;
-        }}
-        
-        .decision-list li {{
-            font-size: 18px;
-            padding: 14px 0;
-            border-bottom: 1px solid #f0f4fa;
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-        }}
-        
-        .decision-list li:last-child {{
-            border-bottom: none;
-        }}
-        
-        .decision-list .bullet {{
-            width: 24px;
-            height: 24px;
-            background: #e6f0ff;
-            border-radius: 50%;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            color: #1e3c72;
-            font-weight: 700;
-            font-size: 14px;
-            flex-shrink: 0;
-            margin-top: 2px;
-        }}
-        
-        .decision-list strong {{
-            color: #1e3c72;
-            font-weight: 600;
-        }}
-        
-        .decision-list .warning {{
-            background: #fee2e2;
-            color: #b91c1c;
-        }}
-        
-        .decision-list .highlight {{
-            background: #e6f0ff;
-            color: #1e3c72;
-            font-weight: 600;
-        }}
-        
-        /* 核心回顾网格 */
-        .review-grid {{
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 16px;
-            margin-bottom: 8px;
-        }}
-        
-        .review-item {{
-            background: #f8faff;
-            border-radius: 18px;
-            padding: 18px 14px;
-        }}
-        
-        .review-item h4 {{
-            font-size: 17px;
-            font-weight: 600;
-            color: #1e3c72;
-            margin-bottom: 12px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }}
-        
-        .review-item p {{
-            font-size: 16px;
-            color: #334155;
-            margin: 0;
-            line-height: 1.5;
-        }}
-        
-        .review-item .tag {{
-            display: inline-block;
-            background: #e6f0ff;
-            color: #1e3c72;
-            padding: 4px 12px;
-            border-radius: 30px;
-            font-size: 14px;
-            font-weight: 500;
-            margin-right: 8px;
-            margin-bottom: 8px;
-        }}
-        
-        /* 风险分析 */
-        .risk-box {{
-            background: #fff8f0;
-            border-radius: 18px;
-            padding: 20px;
-            margin: 16px 0;
-            border-left: 4px solid #f97316;
-        }}
-        
-        .strategy-box {{
-            background: #f0f7ff;
-            border-radius: 18px;
-            padding: 20px;
-            margin-top: 12px;
-            border-left: 4px solid #2a5298;
-        }}
-        
-        .risk-box strong, .strategy-box strong {{
-            font-size: 18px;
-            display: block;
-            margin-bottom: 8px;
-        }}
-        
-        /* 短期展望 */
-        .outlook-box {{
-            background: #e6f0ff;
-            border-radius: 18px;
-            padding: 20px;
-        }}
-        
-        .outlook-highlight {{
-            background: #1e3c72;
-            color: white;
-            border-radius: 30px;
-            padding: 16px 20px;
-            font-size: 18px;
-            font-weight: 500;
-            margin: 16px 0;
-            text-align: center;
-        }}
-        
-        .outlook-reason {{
-            font-size: 17px;
-            color: #334155;
-            line-height: 1.6;
-            margin-top: 12px;
-            padding: 0 4px;
-        }}
-        
-        /* 待办事项 */
-        .todo-list {{
-            list-style: none;
-        }}
-        
-        .todo-list li {{
-            font-size: 18px;
-            padding: 12px 0;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            border-bottom: 1px dashed #e2e8f0;
-        }}
-        
-        .todo-list li:last-child {{
-            border-bottom: none;
-        }}
-        
-        .todo-list .checkbox {{
-            width: 24px;
-            height: 24px;
-            background: #e6f0ff;
-            border-radius: 8px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            color: #1e3c72;
-            font-size: 16px;
-            flex-shrink: 0;
-        }}
-        
-        /* 金句 */
-        .golden-quote {{
-            background: white;
-            border-radius: 30px;
-            padding: 32px 28px;
-            text-align: center;
-            margin-top: 32px;
-            margin-bottom: 20px;
-            border: 1px solid rgba(30, 60, 114, 0.1);
-            box-shadow: 0 10px 30px -15px rgba(30, 60, 114, 0.2);
-            position: relative;
-        }}
-        
-        .golden-quote .quote-mark {{
-            font-size: 60px;
-            color: #2a5298;
-            opacity: 0.2;
-            line-height: 0;
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            font-family: serif;
-        }}
-        
-        .golden-quote p {{
-            font-family: 'Poppins', sans-serif;
-            font-size: 26px;
-            font-weight: 600;
-            color: #1e3c72;
-            line-height: 1.4;
-            margin: 0;
-            position: relative;
-            z-index: 1;
-        }}
-        
-        /* 底部 */
-        .footer {{
-            text-align: center;
-            margin-top: 32px;
-            color: #94a3b8;
-            font-size: 16px;
-        }}
-        
-        .highlight {{
-            color: #2a5298;
-            font-weight: 600;
-            background: linear-gradient(120deg, #e6f0ff 0%, #e6f0ff 100%);
-            padding: 0 4px;
-        }}
-        
-        .badge {{
-            display: inline-block;
-            background: #dcfce7;
-            color: #166534;
-            padding: 6px 14px;
-            border-radius: 30px;
-            font-size: 15px;
-            font-weight: 500;
-        }}
-        
-        .recommendation-badge {{
-            display: inline-block;
-            padding: 6px 16px;
-            border-radius: 30px;
-            font-size: 16px;
-            font-weight: 600;
-            margin-right: 8px;
-        }}
-        
-        .badge-buy {{
-            background: #dcfce7;
-            color: #166534;
-        }}
-        
-        .badge-sell {{
-            background: #fee2e2;
-            color: #b91c1c;
-        }}
-        
-        .badge-hold {{
-            background: #fff3cd;
-            color: #856404;
-        }}
-        
-        @media (max-width: 480px) {{
-            body {{
-                font-size: 16px;
-            }}
-            .container {{
-                padding: 16px 16px 30px;
-            }}
-            .header h1 {{
-                font-size: 36px;
-            }}
-            .executive-summary p {{
-                font-size: 22px;
-            }}
-            .review-grid {{
-                grid-template-columns: 1fr;
-            }}
-            .golden-quote p {{
-                font-size: 22px;
-            }}
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <!-- 头部 -->
-        <div class="header">
-            <h1>🧠 超级大脑</h1>
-            <div class="date">
-                <span>{date}</span>
-                <span class="stock-badge">{stock_code} {stock_name}</span>
-            </div>
-        </div>
-        
-        <!-- 一句话总结 -->
-        <div class="executive-summary">
-            <h2>📋 一句话·总结</h2>
-            <p>{executive_summary}</p>
-        </div>
-        
-        <!-- 决策结果 -->
-        <div class="card">
-            <div class="card-title">
-                <i>🎯</i> 超级大脑·决策结果
-            </div>
-            <ul class="decision-list">
-                {decision_points_html}
-            </ul>
-        </div>
-        
-        <!-- 核心回顾 -->
-        <div class="card">
-            <div class="card-title">
-                <i>📊</i> 核心回顾
-            </div>
-            <div class="review-grid">
-                <div class="review-item">
-                    <h4>📈 基本面</h4>
-                    <p>{fundamentals}</p>
-                </div>
-                <div class="review-item">
-                    <h4>📰 新闻面</h4>
-                    <p>{news}</p>
-                </div>
-                <div class="review-item">
-                    <h4>📉 技术面</h4>
-                    <p>{technical}</p>
-                </div>
-                <div class="review-item">
-                    <h4>🎭 情绪面</h4>
-                    <p>{sentiment}</p>
-                </div>
-            </div>
-        </div>
-        
-        <!-- 风险与策略 -->
-        <div class="card">
-            <div class="card-title">
-                <i>⚠️</i> 风险警示 & 应对策略
-            </div>
-            <div class="risk-box">
-                <strong>🚨 潜在风险</strong>
-                <p>{risk}</p>
-            </div>
-            <div class="strategy-box">
-                <strong>🛡️ 应对策略</strong>
-                <p>{strategy}</p>
-            </div>
-        </div>
-        
-        <!-- 短期展望 -->
-        <div class="card">
-            <div class="card-title">
-                <i>🔮</i> 未来1-3天展望
-            </div>
-            <div class="outlook-box">
-                <div class="outlook-highlight">
-                    上涨可能性：{outlook_possibility}
-                </div>
-                <div class="outlook-reason">
-                    {outlook_reason}
-                </div>
-            </div>
-        </div>
-        
-        <!-- 待办事项 -->
-        <div class="card">
-            <div class="card-title">
-                <i>✅</i> 接下来要做的事
-            </div>
-            <ul class="todo-list">
-                {action_items_html}
-            </ul>
-        </div>
-        
-        <!-- 金句结尾 -->
-        <div class="golden-quote">
-            <div class="quote-mark">"</div>
-            <p>{golden_quote}</p>
-        </div>
-        
-        <div class="footer">
-            <span>⚡ 超级大脑 · 让投资更聪明</span>
-        </div>
-    </div>
-</body>
-</html>"""
+    def _load_html_generation_prompt(self) -> str:
+        """加载HTML生成提示词模板"""
+        return """根据以下股票分析汇报数据，创建一个专业的H5网页：
+
+    汇报数据：
+    {simplified_data}
+
+    网页设计要求：
+    1. 采用现代科技感设计风格，使用Poppins/Inter字体组合
+    2. 使用以下核心配色方案：
+    - 主色调：#1e40af（深蓝色）
+    - 强调色：#3b82f6（亮蓝色）
+    - 警示色：#f59e0b（橙色）
+    - 危险色：#ef4444（红色）
+    - 背景色：#f8fafc（浅灰蓝）
+    - 卡片背景：#ffffff（纯白）
+    - 文字颜色：#1e293b（深灰）
+
+    3. 字体大小规范：
+    - 正文：至少20px（手机上）
+    - 标题h1：2.5rem左右
+    - 标题h2：2.0rem左右
+    - 标题h3：1.6rem左右
+    - 列表项：1.3rem左右
+
+    4. 布局要求：
+    - 英雄区（header）：深蓝色渐变背景(135deg, #1e40af, #3b82f6)，圆角20px，内边距25-30px，包含汇报标题和总结
+    - 所有内容区块使用卡片式布局（圆角16px，内边距30px，阴影0 4px 12px rgba(0,0,0,0.08)）
+    - 卡片悬停时有轻微上浮效果
+    - 关键数据用迷你卡片网格展示（3列，可换行）
+    - 核心建议用特殊卡片样式区分（不同左边框颜色）
+    - 行动步骤用带数字标识的列表展示（圆形数字图标）
+    - 尾部金句区：渐变背景，带大号引导符号
+
+    5. 强调标记：
+    - 核心词汇用highlight类（橙色背景加粗）
+    - 危险提示用danger类（红色背景或红色文字加粗）
+    - 警告用warning类（橙色文字加粗）
+    - 技巧提示用tip类（绿色背景）
+
+    6. 可视化要求：
+    - 研究数据用迷你卡片展示，每个卡片包含：标题、大号数值、趋势说明
+    - 趋势向下用红色(#ef4444)，中性用橙色(#f59e0b)
+    - 卡片背景用浅蓝色渐变
+
+    7. 响应式要求：
+    - 最大宽度800px，居中显示
+    - 移动端适配：字体适当缩小，卡片内边距减少
+    - 使用viewport适配所有手机屏幕
+
+    8. 内容结构要求：
+    - 必须包含汇报的所有内容
+    - 核心结论速览（左侧边蓝色边框卡片）
+    - 决策建议（左侧边橙色边框卡片）
+    - 四维深度分析（基本面、新闻面、技术面、情绪面）
+    - 风险警示（左侧边红色边框卡片）
+    - 上涨可能性分析
+    - 下一步行动计划（带数字标识）
+    - 尾部金句
+
+    9. 代码规范：
+    - 使用CSS变量定义所有颜色
+    - 添加适当的CSS注释
+    - 确保HTML结构语义化
+    - 引入Google Fonts字体
+
+    要求：
+    - 只返回完整的HTML代码，不要包含任何解释性文字
+    - 确保HTML代码可以直接在浏览器中运行
+    - 代码要整洁、专业，注释清晰
+    - 根据汇报数据的实际情况，灵活调整具体内容，但保持整体结构和样式规范"""
+    
+    
+    def _load_html_generation_prompt2(self) -> str:
+        """加载HTML生成提示词模板"""
+        return """根据以下股票分析汇报数据，创建一个专业的H5网页：
+
+汇报数据：
+{simplified_data}
+
+网页设计要求：
+1. 采用现代科技感设计风格（Poppins/Inter字体组合）
+2. 研究数据可以通过可视化图表和可视化卡片展示，让老板可以更直观地探索数据，更好地理解内容。如果觉得没有必要强行展示图表，可以不用显示图表。
+3. 老板年龄大了，眼神不太好，网页里面的字尽量做大一些（建议正文至少18px，标题更大）。
+4. 网页的背景颜色用白色或者浅色。
+5. 文字里面的核心重点词汇、句子用css标签加粗或者加颜色显示（建议使用深蓝色#1e3c72作为强调色）。
+6. 重点关注页面在手机上浏览的体验，不考虑电脑端适配。
+7. 需要包含汇报的所有内容，结构清晰。
+8. 页面顶部英雄区呈现汇报的“标题”和“总结”，英雄区部分选一个颜色使用深色到浅色的渐变（建议使用蓝色系#1e3c72到#2a5298），营造有趣的氛围，英雄区与后面模块内容之间要有一定的留白区域。
+9. 页面尾部只显示金句作为结尾。
+10. 使用响应式设计，确保在各种手机屏幕上都能良好显示。
+11. 增加适当的间距和留白，提高可读性。
+12. 使用卡片式布局，每个模块独立成卡片，增强视觉层次感。
+
+要求：
+- 只返回完整的HTML代码，不要包含任何解释性文字
+- 确保HTML代码可以直接在浏览器中运行
+- 引入必要的字体和样式
+- 代码要整洁，有适当的注释
+- 颜色搭配要专业、舒适，适合长时间阅读"""
     
     async def simplify_report(self, request: SimplifiedReportRequest) -> SimplifiedReport:
         """生成简化报告（带缓存）"""
@@ -699,12 +285,10 @@ class ReportSimplifier:
             # 6. 提取原始摘要
             original_summary = original_content.get("summary", "")
             
-            # 7. 生成HTML页面
-            stock_code = original_content.get("symbol", "未知")
-            stock_name = original_content.get("stock_name", stock_code)
-            html_content = self._generate_html(
-                stock_code=stock_code,
-                stock_name=stock_name,
+            # 7. 调用LLM生成HTML页面
+            html_content = await self._generate_html_by_llm(
+                stock_code=original_content.get("symbol", "未知"),
+                stock_name=original_content.get("stock_name", original_content.get("symbol", "未知")),
                 simplified_data=simplified_data
             )
             
@@ -728,7 +312,7 @@ class ReportSimplifier:
             self._cache[cache_key] = simplified_report
             
             # 10. 可选：保存HTML到文件
-            await self._save_html_to_file(request.analysis_id, stock_code, html_content)
+            await self._save_html_to_file(request.analysis_id, original_content.get("symbol", "未知"), html_content)
             
             logger.info(f"✅ 简化报告生成完成: {request.analysis_id}, 压缩比例: {compression_ratio:.2%}")
             return simplified_report
@@ -751,29 +335,26 @@ class ReportSimplifier:
         for attempt in range(max_retries):
             try:
                 # 1. 获取模型配置
-                from app.services.simple_analysis_service import get_provider_and_url_by_model_sync
-                
-                model_name = unified_config.get_quick_analysis_model()
-                provider_info = get_provider_and_url_by_model_sync(model_name)
+                llm_config = self._get_llm_config()
                 
                 logger.info(f"🔧 [简化报告] 尝试 {attempt + 1}/{max_retries}")
-                logger.info(f"  模型: {model_name}")
-                logger.info(f"  供应商: {provider_info['provider']}")
-                logger.info(f"  API地址: {provider_info['backend_url']}")
-                logger.info(f"  API Key: {'已配置' if provider_info.get('api_key') else '未配置（将使用环境变量）'}")
+                logger.info(f"  模型: {llm_config['model_name']}")
+                logger.info(f"  供应商: {llm_config['provider']}")
+                logger.info(f"  API地址: {llm_config['backend_url']}")
+                logger.info(f"  API Key: {'已配置' if llm_config.get('api_key') else '未配置（将使用环境变量）'}")
                 
                 # 2. 准备提示词
                 prompt = self._build_optimized_prompt(original_content, max_length, language)
                 
                 # 3. 使用TradingAgents的create_llm_by_provider创建LLM实例
                 llm = create_llm_by_provider(
-                    provider=provider_info["provider"],
-                    model=model_name,
-                    backend_url=provider_info["backend_url"],
-                    temperature=0.3,  # 降低温度以获得更稳定的输出
-                    max_tokens=2000,
-                    timeout=60,  # 60秒超时
-                    api_key=provider_info.get("api_key")
+                    provider=llm_config["provider"],
+                    model=llm_config["model_name"],
+                    backend_url=llm_config["backend_url"],
+                    temperature=0.4,  # 略高一点的温度，让设计更有创意
+                    max_tokens=4000,  # 增加token限制以容纳完整的HTML
+                    timeout=80,
+                    api_key=llm_config["api_key"]
                 )
                 
                 # 4. 调用LLM（同步调用，因为create_llm_by_provider返回的是同步LLM）
@@ -818,24 +399,368 @@ class ReportSimplifier:
         return self._get_default_simplified_data(original_content)
     
     def _build_optimized_prompt(self, content: Dict[str, Any], max_length: int, language: str) -> str:
-        """构建优化后的提示词（减少token使用）"""
-        # 提取关键信息，避免发送整个原始报告
-        simplified_input = {
-            "股票代码": content.get("symbol", "未知"),
-            "股票名称": content.get("stock_name", content.get("symbol", "未知")),
-            "总结": content.get("summary", "")[:300],
-            "建议": content.get("recommendation", ""),
-            "置信度": content.get("confidence_score", 0),
-            "风险等级": content.get("risk_level", "中等"),
-            "关键点": content.get("key_points", [])[:3],
-            "详细分析": str(content.get("detailed_analysis", {}))[:500],
-            "决策": content.get("decision", {}),
-            "报告数量": len(content.get("reports", {}))
-        }
-        
+        """构建优化后的提示词（直接传递原始报告内容）"""
+        # 直接使用完整的原始报告内容
         return self._prompt_template.format(
-            original_content=json.dumps(simplified_input, ensure_ascii=False, indent=2)
+            original_content=json.dumps(content, ensure_ascii=False, indent=2)
         )
+    
+    def _get_llm_config(self) -> Dict[str, Any]:
+        """获取LLM配置
+        优先从环境变量获取，如果没有则从统一配置中获取
+        """
+        
+        is_enabled = os.getenv("DEEPSEEK_ENABLED")
+        if is_enabled and is_enabled.lower() in ["true", "1", "yes"]:
+            base_url = os.getenv("DEEPSEEK_BASE_URL")
+            api_key = os.getenv("DEEPSEEK_API_KEY")
+            model_name = unified_config.get_quick_analysis_model()
+            from app.services.simple_analysis_service import get_provider_and_url_by_model_sync
+            provider_info = get_provider_and_url_by_model_sync(model_name)    
+ 
+            logger.info(f"  模型: {model_name}")
+            logger.info(f"  提供商: {provider_info['provider']}")
+            logger.info(f"  后端URL: {base_url}")
+            
+            return {
+                "model_name": model_name,
+                "provider": 'deepseek',
+                "backend_url": base_url,
+                "api_key": api_key
+            }
+        
+        else:
+            model_name = unified_config.get_quick_analysis_model()
+            from app.services.simple_analysis_service import get_provider_and_url_by_model_sync
+            provider_info = get_provider_and_url_by_model_sync(model_name)    
+            
+            # 修正：使用单引号
+            logger.info(f"  模型: {model_name}")
+            logger.info(f"  提供商: {provider_info['provider']}")
+            logger.info(f"  后端URL: {provider_info['backend_url']}")
+            
+            return {
+                "model_name": model_name,
+                "provider": provider_info["provider"],
+                "backend_url": provider_info["backend_url"],
+                "api_key": provider_info.get("api_key")
+            }
+        
+        
+    async def _generate_html_by_llm(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> str:
+        """调用LLM生成HTML页面"""
+        max_retries = 2
+        retry_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                # 1. 获取模型配置
+                llm_config = self._get_llm_config()
+                
+                # 2. 准备HTML生成提示词
+                # 补充股票信息到简化数据中
+                enhanced_data = {
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "date": datetime.now().strftime("%Y年%m月%d日"),
+                    **simplified_data
+                }
+                
+                prompt = self._html_generation_prompt.format(
+                    simplified_data=json.dumps(enhanced_data, ensure_ascii=False, indent=2)
+                )
+                
+                # 3. 创建LLM实例
+                llm = create_llm_by_provider(
+                    provider=llm_config["provider"],
+                    model=llm_config["model_name"],
+                    backend_url=llm_config["backend_url"],
+                    temperature=0.4,  # 略高一点的温度，让设计更有创意
+                    max_tokens=4000,  # 增加token限制以容纳完整的HTML
+                    timeout=80,
+                    api_key=llm_config["api_key"]
+                )
+                
+                # 4. 调用LLM
+                loop = asyncio.get_event_loop()
+                
+                if hasattr(llm, 'ainvoke'):
+                    response = await llm.ainvoke(prompt)
+                else:
+                    response = await loop.run_in_executor(None, llm.invoke, prompt)
+                
+                # 5. 处理响应
+                if hasattr(response, 'content'):
+                    content = response.content
+                elif isinstance(response, str):
+                    content = response
+                else:
+                    content = str(response)
+                
+                logger.info(f"✅ HTML生成响应长度: {len(content)} 字符")
+                
+                # 6. 提取HTML内容（处理可能的代码块包裹）
+                html_content = self._extract_html_from_response(content)
+                
+                # 验证HTML基本结构
+                if "<!DOCTYPE html>" in html_content and "<html" in html_content and "</html>" in html_content:
+                    return html_content
+                else:
+                    raise ValueError("生成的HTML不完整")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ HTML生成失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                else:
+                    # 使用备用HTML模板
+                    logger.error("❌ HTML生成失败，使用备用模板")
+                    return self._generate_fallback_html(stock_code, stock_name, simplified_data)
+        
+        # 返回备用HTML
+        return self._generate_fallback_html(stock_code, stock_name, simplified_data)
+    
+    def _extract_html_from_response(self, response: str) -> str:
+        """从LLM响应中提取HTML内容"""
+        import re
+        
+        # 尝试提取```html```包裹的内容
+        html_match = re.search(r'```html\s*(.*?)\s*```', response, re.DOTALL)
+        if html_match:
+            return html_match.group(1).strip()
+        
+        # 尝试提取任何HTML内容
+        html_start = response.find('<!DOCTYPE html>')
+        if html_start == -1:
+            html_start = response.find('<html')
+        
+        if html_start != -1:
+            html_end = response.rfind('</html>')
+            if html_end != -1:
+                return response[html_start:html_end + 7].strip()
+        
+        # 如果都提取不到，返回原始响应
+        return response.strip()
+    
+    def _generate_fallback_html(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> str:
+        """生成备用HTML（当LLM生成失败时）"""
+        core_review = simplified_data.get("core_review", {})
+        risk_analysis = simplified_data.get("risk_analysis", {})
+        short_term_outlook = simplified_data.get("short_term_outlook", {})
+        
+        # 构建基础的移动端友好HTML
+        html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>超级大脑 · {stock_code} 分析汇报</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Inter', sans-serif;
+            background: #ffffff;
+            color: #1e293b;
+            line-height: 1.8;
+            font-size: 20px; /* 大号字体 */
+            padding: 0;
+            margin: 0;
+        }}
+        .container {{
+            max-width: 100%;
+            padding: 0 20px;
+            margin: 0 auto;
+        }}
+        /* 英雄区 */
+        .hero {{
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 40px 20px;
+            border-radius: 0 0 30px 30px;
+            margin-bottom: 30px;
+        }}
+        .hero h1 {{
+            font-family: 'Poppins', sans-serif;
+            font-size: 36px;
+            margin-bottom: 20px;
+            text-align: center;
+        }}
+        .hero .summary {{
+            font-size: 22px;
+            text-align: center;
+            line-height: 1.6;
+        }}
+        /* 卡片样式 */
+        .card {{
+            background: #f8f9fa;
+            border-radius: 20px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }}
+        .card h2 {{
+            font-family: 'Poppins', sans-serif;
+            font-size: 28px;
+            color: #1e3c72;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e6f0ff;
+        }}
+        /* 列表样式 */
+        ul {{
+            list-style: none;
+            padding-left: 10px;
+        }}
+        li {{
+            margin-bottom: 15px;
+            padding-left: 10px;
+            position: relative;
+            font-size: 20px;
+        }}
+        li:before {{
+            content: "•";
+            color: #2a5298;
+            font-weight: bold;
+            position: absolute;
+            left: -15px;
+            font-size: 24px;
+        }}
+        /* 核心回顾网格 */
+        .review-grid {{
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 15px;
+        }}
+        .review-item {{
+            background: #e6f0ff;
+            border-radius: 15px;
+            padding: 20px;
+        }}
+        .review-item h4 {{
+            font-size: 22px;
+            color: #1e3c72;
+            margin-bottom: 10px;
+        }}
+        .review-item p {{
+            font-size: 20px;
+        }}
+        /* 风险和策略 */
+        .risk-box, .strategy-box {{
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 15px;
+        }}
+        .risk-box {{
+            background: #fff8f0;
+            border-left: 5px solid #f97316;
+        }}
+        .strategy-box {{
+            background: #f0f7ff;
+            border-left: 5px solid #2a5298;
+        }}
+        /* 重点强调 */
+        .highlight {{
+            color: #1e3c72;
+            font-weight: 700;
+        }}
+        /* 金句 */
+        .golden-quote {{
+            font-family: 'Poppins', sans-serif;
+            font-size: 24px;
+            text-align: center;
+            padding: 30px 20px;
+            color: #1e3c72;
+            font-weight: 600;
+            margin-top: 20px;
+        }}
+        /* 响应式调整 */
+        @media (max-width: 480px) {{
+            body {{ font-size: 19px; }}
+            .hero h1 {{ font-size: 32px; }}
+            .hero .summary {{ font-size: 21px; }}
+            .card h2 {{ font-size: 26px; }}
+            li {{ font-size: 19px; }}
+        }}
+    </style>
+</head>
+<body>
+    <!-- 英雄区 -->
+    <div class="hero">
+        <div class="container">
+            <h1>🧠 超级大脑 · {stock_code} {stock_name}</h1>
+            <div class="summary">{simplified_data.get('executive_summary', '分析总结')}</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 决策结果 -->
+        <div class="card">
+            <h2>🎯 超级大脑·决策结果</h2>
+            <ul>
+                {''.join([f'<li>{point}</li>' for point in simplified_data.get('decision_points', [])])}
+            </ul>
+        </div>
+
+        <!-- 核心回顾 -->
+        <div class="card">
+            <h2>📊 核心回顾</h2>
+            <div class="review-grid">
+                <div class="review-item">
+                    <h4>📈 基本面</h4>
+                    <p>{core_review.get('fundamentals', '无数据')}</p>
+                </div>
+                <div class="review-item">
+                    <h4>📰 新闻面</h4>
+                    <p>{core_review.get('news', '无数据')}</p>
+                </div>
+                <div class="review-item">
+                    <h4>📉 技术面</h4>
+                    <p>{core_review.get('technical', '无数据')}</p>
+                </div>
+                <div class="review-item">
+                    <h4>🎭 情绪面</h4>
+                    <p>{core_review.get('sentiment', '无数据')}</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 风险与策略 -->
+        <div class="card">
+            <h2>⚠️ 风险警示 & 应对策略</h2>
+            <div class="risk-box">
+                <strong class="highlight">🚨 潜在风险</strong>
+                <p>{risk_analysis.get('risk', '暂无显著风险')}</p>
+            </div>
+            <div class="strategy-box">
+                <strong class="highlight">🛡️ 应对策略</strong>
+                <p>{risk_analysis.get('strategy', '保持关注')}</p>
+            </div>
+        </div>
+
+        <!-- 短期展望 -->
+        <div class="card">
+            <h2>🔮 未来1-3天展望</h2>
+            <p class="highlight">上涨可能性：{short_term_outlook.get('possibility', '中')}</p>
+            <p>{short_term_outlook.get('reason', '市场情绪平稳')}</p>
+        </div>
+
+        <!-- 待办事项 -->
+        <div class="card">
+            <h2>✅ 接下来要做的事</h2>
+            <ul>
+                {''.join([f'<li>{item}</li>' for item in simplified_data.get('action_items', [])])}
+            </ul>
+        </div>
+
+        <!-- 金句结尾 -->
+        <div class="golden-quote">
+            {simplified_data.get('golden_quote', '谋定而后动，知止而有得')}
+        </div>
+    </div>
+</body>
+</html>"""
+        return html
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """解析LLM响应，处理各种格式"""
@@ -907,7 +832,7 @@ class ReportSimplifier:
         stock_code = original_content.get("symbol", "未知")
         stock_name = original_content.get("stock_name", stock_code)
         
-        html_content = self._generate_html(
+        html_content = self._generate_fallback_html(
             stock_code=stock_code,
             stock_name=stock_name,
             simplified_data=default_data
@@ -926,63 +851,6 @@ class ReportSimplifier:
             html_content=html_content,
             compression_ratio=0.5
         )
-    
-    def _generate_html(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> str:
-        """生成HTML页面"""
-        from datetime import datetime
-        
-        # 处理决策点HTML
-        decision_points = simplified_data.get("decision_points", [])
-        decision_points_html = ""
-        for i, point in enumerate(decision_points, 1):
-            # 判断是否包含风险关键词
-            is_warning = any(keyword in point for keyword in ["陷阱", "坑", "隐患", "风险", "警惕", "注意", "谨慎"])
-            warning_class = ' class="warning"' if is_warning else ''
-            
-            decision_points_html += f"""
-            <li>
-                <span class="bullet"{warning_class}>{i}</span>
-                <span>{point}</span>
-            </li>"""
-        
-        # 处理待办事项HTML
-        action_items = simplified_data.get("action_items", [])
-        action_items_html = ""
-        for i, item in enumerate(action_items, 1):
-            action_items_html += f"""
-            <li>
-                <span class="checkbox">✓</span>
-                <span>{item}</span>
-            </li>"""
-        
-        # 获取核心回顾
-        core_review = simplified_data.get("core_review", {})
-        risk_analysis = simplified_data.get("risk_analysis", {})
-        short_term_outlook = simplified_data.get("short_term_outlook", {})
-        
-        # 格式化日期
-        today = datetime.now().strftime("%Y年%m月%d日")
-        
-        # 填充HTML模板
-        html = self._html_template.format(
-            date=today,
-            stock_code=stock_code,
-            stock_name=stock_name,
-            executive_summary=simplified_data.get("executive_summary", "分析完成"),
-            decision_points_html=decision_points_html,
-            fundamentals=core_review.get("fundamentals", "无数据"),
-            news=core_review.get("news", "无数据"),
-            technical=core_review.get("technical", "无数据"),
-            sentiment=core_review.get("sentiment", "无数据"),
-            risk=risk_analysis.get("risk", "暂无显著风险"),
-            strategy=risk_analysis.get("strategy", "保持关注"),
-            outlook_possibility=short_term_outlook.get("possibility", "中"),
-            outlook_reason=short_term_outlook.get("reason", "市场情绪平稳"),
-            action_items_html=action_items_html,
-            golden_quote=simplified_data.get("golden_quote", "谋定而后动，知止而有得")
-        )
-        
-        return html
     
     async def _get_simplified_report_from_db(self, analysis_id: str) -> Optional[Dict[str, Any]]:
         """从数据库获取简化报告"""
