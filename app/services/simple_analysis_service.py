@@ -816,7 +816,7 @@ class SimpleAnalysisService:
         user_id: str,
         request: SingleAnalysisRequest
     ):
-        """在后台执行分析任务（修复版）"""
+        """在后台执行分析任务"""
         # 🔧 使用 get_symbol() 方法获取股票代码（兼容 symbol 和 stock_code 字段）
         stock_code = request.get_symbol()
         progress_tracker = None
