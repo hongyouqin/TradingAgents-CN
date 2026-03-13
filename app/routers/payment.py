@@ -251,12 +251,15 @@ async def wechat_pay_notify(request: Request):
             media_type="text/xml"
         )
     
+    logger.info(f"==收到微信支付回调: {data}")
     # 处理充值成功
     ok, msg = await order_service.handle_recharge_success(
         order_no=data['out_trade_no'],
         transaction_id=data['transaction_id'],
         paid_amount=int(data['total_fee'])
     )
+    
+    logger.info(f"==充值回调处理结果: {ok}, {msg}")
     
     if ok:
         return HTMLResponse(
