@@ -281,7 +281,10 @@ async def get_balance(current_user: User = Depends(get_current_user)):
     """
     获取用户算力余额
     """
-    balance = await power_account_service.get_balance(current_user)
+    temp_dict = current_user.copy()
+    temp_dict['hashed_password'] = 'dummy'  # 临时密码
+    user_obj = User.model_validate(temp_dict)
+    balance = await power_account_service.get_balance(user_obj)
     return {
         "code": 0,
         "message": "success",
@@ -306,8 +309,11 @@ async def get_transactions(
     获取交易流水（充值和消费）
     - transaction_type: RECHARGE(仅充值), CONSUME(仅消费), ALL(全部)
     """
+    temp_dict = current_user.copy()
+    temp_dict['hashed_password'] = 'dummy'  # 临时密码
+    user_obj = User.model_validate(temp_dict)
     transactions = await power_account_service.get_transactions(
-        current_user, 
+        user_obj, 
         limit,
         transaction_type=transaction_type
     )
