@@ -106,7 +106,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# @router.websocket("/ws/notifications")
+@router.websocket("/ws/notifications")
 async def websocket_notifications_endpoint(
     websocket: WebSocket,
     token: str = Query(...)
@@ -127,10 +127,6 @@ async def websocket_notifications_endpoint(
     
         user_id = token_data.sub if token_data.sub else "admin"
         connection_id = f"{user_id}_{id(websocket)}"
-        
-        # 接受 WebSocket 连接
-        await websocket.accept()
-        logger.info(f"🔌 [WS] 新连接: {connection_id}")
         
         # 连接 WebSocket
         await manager.connect(websocket, user_id)

@@ -174,7 +174,11 @@ async def submit_single_analysis(
     
     try:
         # 1. 先检查余额是否足够
-        balance_info = await power_account_service.get_balance(user)
+        
+        temp_dict = user.copy()
+        temp_dict['hashed_password'] = 'dummy'  # 临时密码
+        user_obj = User.model_validate(temp_dict)
+        balance_info = await power_account_service.get_balance(user_obj.copy())
         if balance_info['balance'] < PRICE:
             raise HTTPException(
                 status_code=400,
@@ -185,11 +189,7 @@ async def submit_single_analysis(
         analysis_service = get_simple_analysis_service()
         task_result = await analysis_service.create_analysis_task(
             user_id=user["id"],
-            request=request,
-            metadata={
-                'price': float(PRICE),
-                'payment_status': 'PENDING'  # 待支付状态
-            }
+            request=request
         )
         
         task_id = task_result["task_id"]
@@ -213,9 +213,6 @@ async def submit_single_analysis(
                 # 只有成功才扣费
                 if task_status and task_status.get('status', '').upper() == 'COMPLETED':
                     # 调用现有的consume函数扣费
-                    temp_dict = user.copy()
-                    temp_dict['hashed_password'] = 'dummy'  # 临时密码
-                    user_obj = User.model_validate(temp_dict)
                     success, msg = await power_account_service.consume(
                         user=user_obj,
                         order_no=consume_no,
