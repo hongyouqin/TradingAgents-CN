@@ -564,16 +564,33 @@ class PowerAccountService:
         }
     
     def _get_transactions_sync(self, user: User, limit: int = 50, 
-                               status: str = None) -> list:
-        """同步：获取用户交易流水"""
+                            status: str = None,
+                            transaction_type: str = None) -> list:
+        """
+        同步：获取用户交易流水
+        
+        Args:
+            user: 用户对象
+            limit: 返回数量限制
+            status: 筛选状态 (SUCCESS/PENDING/FAILED)
+            transaction_type: 筛选类型 (RECHARGE/CONSUME)
+        """
         try:
             query = {"user_id": str(user.id)}
+            
+            # 添加状态筛选
             if status:
                 query["status"] = status
             
+            # 🔥 添加交易类型筛选
+            if transaction_type and transaction_type != 'ALL':
+                query["transaction_type"] = transaction_type
+            
+            logger.info(f"🔍 查询交易流水: {query}, limit={limit}")
+            
             cursor = self.transactions_collection.find(query)\
-                       .sort("created_at", -1)\
-                       .limit(limit)
+                    .sort("created_at", -1)\
+                    .limit(limit)
             
             transactions = []
             for t in cursor:
@@ -590,6 +607,7 @@ class PowerAccountService:
                     t['account_id'] = str(t['account_id'])
                 transactions.append(t)
             
+            logger.info(f"✅ 获取到 {len(transactions)} 条交易流水")
             return transactions
             
         except Exception as e:
@@ -629,8 +647,23 @@ class PowerAccountService:
     async def get_balance(self, user: User) -> Dict[str, Decimal]:
         return await asyncio.to_thread(self._get_balance_sync, user)
     
-    async def get_transactions(self, user: User, limit: int = 50) -> list:
-        return await asyncio.to_thread(self._get_transactions_sync, user, limit)
+    async def get_transactions(self, user: User, limit: int = 50,
+                            transaction_type: str = None) -> list:
+        """
+        异步：获取用户交易流水
+        
+        Args:
+            user: 用户对象
+            limit: 返回数量限制
+            transaction_type: 筛选类型 (RECHARGE/CONSUME)
+        """
+        return await asyncio.to_thread(
+            self._get_transactions_sync, 
+            user, 
+            limit,
+            status=None,
+            transaction_type=transaction_type
+        )
     
     async def get_pending_transactions(self, minutes: int = 5) -> list:
         """获取待处理的交易（用于补偿）"""

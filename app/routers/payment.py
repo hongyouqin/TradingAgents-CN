@@ -310,12 +310,16 @@ async def get_transactions(
     - transaction_type: RECHARGE(仅充值), CONSUME(仅消费), ALL(全部)
     """
     temp_dict = current_user.copy()
-    temp_dict['hashed_password'] = 'dummy'  # 临时密码
+    temp_dict['hashed_password'] = 'dummy'
     user_obj = User.model_validate(temp_dict)
+    
+    # 如果 transaction_type 是 ALL，传 None 给服务层（返回全部）
+    filter_type = None if transaction_type == 'ALL' else transaction_type
+    
     transactions = await power_account_service.get_transactions(
         user_obj, 
         limit,
-        transaction_type=transaction_type
+        transaction_type=filter_type  # None 表示不筛选
     )
     
     # 格式化返回
