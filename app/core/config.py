@@ -42,11 +42,11 @@ class Settings(BaseSettings):
     MONGO_SERVER_SELECTION_TIMEOUT_MS: int = Field(default=5000)  # 服务器选择超时：5秒
     
     # 微信支付配置
-    # ⚠️ 注意：默认值仅供测试使用，生产环境请务必替换为实际的商户信息，并妥善保管API密钥等敏感信息
-    WECHAT_APP_ID: str = Field(default="")
-    WECHAT_MCH_ID: str = Field(default="")
-    WECHAT_API_KEY: str = Field(default="")
-    WECHAT_NOTIFY_URL: str = Field(default="https://rehearsable-lineable-esperanza.ngrok-free.dev/api/payment/wxpay/notify")
+    # 私有变量用于延迟加载
+    _wechat_app_id: Optional[str] = None
+    _wechat_mch_id: Optional[str] = None
+    _wechat_api_key: Optional[str] = None
+    _wechat_notify_url: Optional[str] = None    
     
     # 阿里云短信RAMKey配置
     _sms_access_key_id: Optional[str] = None
@@ -65,6 +65,62 @@ class Settings(BaseSettings):
         if self._sms_access_key_secret is None:
             self._sms_access_key_secret = os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
         return self._sms_access_key_secret
+
+    @property
+    def WECHAT_APP_ID(self) -> str:
+        """延迟加载微信APP_ID"""
+        if self._wechat_app_id is None:
+            # 优先从环境变量获取，如果没有则使用默认值
+            self._wechat_app_id = os.environ.get('WECHAT_APP_ID') or self.WECHAT_APP_ID
+        return self._wechat_app_id
+    
+    @property
+    def WECHAT_MCH_ID(self) -> str:
+        """延迟加载微信商户号"""
+        if self._wechat_mch_id is None:
+            self._wechat_mch_id = os.environ.get('WECHAT_MCH_ID') or self.WECHAT_MCH_ID
+        return self._wechat_mch_id
+    
+    @property
+    def WECHAT_API_KEY(self) -> str:
+        """延迟加载微信API密钥"""
+        if self._wechat_api_key is None:
+            self._wechat_api_key = os.environ.get('WECHAT_API_KEY') or self.WECHAT_API_KEY
+        return self._wechat_api_key
+    
+    @property
+    def WECHAT_NOTIFY_URL(self) -> str:
+        """延迟加载微信通知URL"""
+        if self._wechat_notify_url is None:
+            self._wechat_notify_url = os.environ.get('WECHAT_NOTIFY_URL') or self.WECHAT_NOTIFY_URL
+        return self._wechat_notify_url
+    
+    def validate_wechat_config(self) -> tuple[bool, str]:
+        """验证微信支付配置是否完整"""
+        missing = []
+        
+        if not self.WECHAT_APP_ID:
+            missing.append("WECHAT_APP_ID")
+        elif not self.WECHAT_APP_ID.startswith('wx'):
+            print(f"警告: WECHAT_APP_ID 格式可能不正确: {self.WECHAT_APP_ID}")
+            
+        if not self.WECHAT_MCH_ID:
+            missing.append("WECHAT_MCH_ID")
+        elif not self.WECHAT_MCH_ID.isdigit():
+            print(f"警告: WECHAT_MCH_ID 应为纯数字: {self.WECHAT_MCH_ID}")
+            
+        if not self.WECHAT_API_KEY:
+            missing.append("WECHAT_API_KEY")
+        elif len(self.WECHAT_API_KEY) != 32:
+            print(f"警告: WECHAT_API_KEY 长度应为32位，当前{len(self.WECHAT_API_KEY)}位")
+            
+        if not self.WECHAT_NOTIFY_URL:
+            missing.append("WECHAT_NOTIFY_URL")
+            
+        if missing:
+            return False, f"缺少必要配置: {', '.join(missing)}"
+        
+        return True, "微信支付配置完整"
 
     @property
     def MONGO_URI(self) -> str:

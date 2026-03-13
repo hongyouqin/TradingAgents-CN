@@ -124,8 +124,8 @@ async def websocket_notifications_endpoint(
             logger.warning(f"❌ [WS] 认证失败: token无效")
             await websocket.close(code=1008, reason="Unauthorized")
             return
-        
-        user_id = token_data.get("sub", "admin")  # 从 token_data 中获取用户ID
+    
+        user_id = token_data.sub if token_data.sub else "admin"
         connection_id = f"{user_id}_{id(websocket)}"
         
         # 接受 WebSocket 连接

@@ -3,6 +3,7 @@
 增强版本，支持优先级、进度跟踪、任务管理等功能
 """
 
+from decimal import Decimal
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -13,46 +14,24 @@ import time
 import uuid
 import asyncio
 
+from app.models.user import User
 from app.routers.auth_db import get_current_user
+from app.services.power_account_service import power_account_service
+from app.services.memory_state_manager import get_memory_state_manager
 from app.services.queue_service import get_queue_service, QueueService
-from app.services.analysis_service import get_analysis_service
 from app.services.simple_analysis_service import get_simple_analysis_service
 from app.services.websocket_manager import get_websocket_manager
 from app.models.analysis import (
-    SingleAnalysisRequest, BatchAnalysisRequest, AnalysisParameters,
-    AnalysisTaskResponse, AnalysisBatchResponse, AnalysisHistoryQuery
+    SingleAnalysisRequest, BatchAnalysisRequest
 )
 
 router = APIRouter()
 logger = logging.getLogger("webapi")
 
-# 存储所有后台任务引用
-_background_tasks: Set[asyncio.Task] = set()
 # 存储任务元数据
 _task_metadata: Dict[str, Dict[str, Any]] = {}
 
-def _cleanup_task(task: asyncio.Task):
-    """任务完成后的清理函数"""
-    try:
-        # 从集合中移除
-        _background_tasks.discard(task)
-        
-        # 获取任务ID（如果存储在任务对象中）
-        task_id = getattr(task, "_task_id", "unknown")
-        
-        # 检查任务是否有异常
-        if not task.cancelled() and task.exception():
-            exc = task.exception()
-            logger.error(f"❌ 任务 {task_id} 异常: {exc}")
-        
-        logger.debug(f"🧹 任务清理完成，剩余后台任务: {len(_background_tasks)}")
-        
-        # 清理元数据（可选，保留一段时间）
-        if task_id in _task_metadata:
-            _task_metadata[task_id]["end_time"] = datetime.utcnow().isoformat()
-            
-    except Exception as e:
-        logger.error(f"❌ 清理任务时出错: {e}")
+
 
 # 兼容性：保留原有的请求模型
 class SingleAnalyzeRequest(BaseModel):
@@ -83,12 +62,46 @@ async def get_simplified_report_html_endpoint(analysis_id: str):
         return HTMLResponse(content=html)
     return HTMLResponse(content="<h1>报告不存在</h1>", status_code=404)
 
+
 @router.post("/single_test", response_model=Dict[str, Any])
 async def submit_single_analysis_test(
     request: SingleAnalysisRequest,
     user: dict = Depends(get_current_user)
 ):
-    """提交单股分析任务"""
+    
+    """提交单股分析任务
+        请求参数
+        {
+            "symbol": "601611",
+            "stock_code": "601611",
+            "parameters": {
+                "market_type": "A股",
+                "analysis_date": "2026-03-13",
+                "research_depth": "标准分析",
+                "selected_analysts": [
+                    "market",
+                    "fundamentals"
+                ],
+                "include_sentiment": true,
+                "include_risk": true,
+                "language": "zh-CN",
+                "quick_analysis_model": "deepseek-chat",
+                "deep_analysis_model": "deepseek-chat"
+            }
+        }
+    """
+    # temp_dict = user.copy()
+    # temp_dict['hashed_password'] = 'dummy'  # 临时密码
+    # user_obj = User.model_validate(temp_dict)
+    # logger.info(f"✅ xx用户信息：{user_obj}")
+    # power_user = power_account_service._get_or_create_account_sync(user_obj)
+    # logger.info(f"✅ xx算力账户2信息：{power_user}")
+    
+    # return {
+    #         "success": True,
+    #         "message": "分析任务已完成"
+    # }
+    
     try:
         # 创建任务
         analysis_service = get_simple_analysis_service()
@@ -101,13 +114,47 @@ async def submit_single_analysis_test(
             user["id"],
             request
         )
-        
+    
         # 获取结果
-        status = await analysis_service.get_task_status(task_id)
+        
+        PRICE = Decimal('20')
+
+        consume_no = f"ANA{task_id}"  # 直接用task_id作为订单号
+        global_memory_manager = get_memory_state_manager()
+        task_status = await global_memory_manager.get_task_dict(task_id)
+        
+        logger.info(f"✅ =哈哈==准备扣费: {task_id}， 当前状态: {task_status.get('status') if task_status else '未知'}")
+        # 只有成功才扣费
+        if task_status and task_status.get('status', '').upper() == 'COMPLETED':
+            
+                temp_dict = user.copy()
+                temp_dict['hashed_password'] = 'dummy'  # 临时密码
+                user_obj = User.model_validate(temp_dict)
+                logger.info(f"✅ ===开始扣费: {task_id} 用户信息：{user_obj}")
+            # 调用现有的consume函数扣费
+                success, msg = power_account_service._consume_sync(
+                    user=user_obj,
+                    order_no=consume_no,
+                    amount=PRICE,
+                    description=f"股票分析-{request.stock_code}",
+                    metadata={
+                            'task_id': task_id,
+                            'stock_code': request.stock_code,
+                            'analysis_type': 'single'
+                        }
+                )
+                    
+                if success:
+                    logger.info(f"✅ 分析成功并扣费: {task_id}")
+                else:
+                    # 扣费失败
+                    logger.error(f"❌ 分析成功但扣费失败: {task_id}, {msg}")
+        else:
+                # 分析失败，不扣费
+                logger.info(f"⚠️ 分析失败，不扣费: {task_id}")
         
         return {
             "success": True,
-            "data": status,
             "message": "分析任务已完成"
         }
         
@@ -122,62 +169,103 @@ async def submit_single_analysis(
     background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user)
 ):
-    """提交单股分析任务 - 使用 BackgroundTasks 异步执行"""
+    """提交单股分析任务 - 使用consume函数"""
+    PRICE = Decimal('1.8')
+    
     try:
-        logger.info(f"🎯 收到单股分析请求")
-        logger.info(f"👤 用户信息: {user}")
-        logger.info(f"📊 请求数据: {request}")
-
-        # 立即创建任务记录并返回，不等待执行完成
+        # 1. 先检查余额是否足够
+        balance_info = await power_account_service.get_balance(user)
+        if balance_info['balance'] < PRICE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"算力不足，需要{PRICE}⚡，当前余额{balance_info['balance']}⚡"
+            )
+        
+        # 2. 创建任务记录（不扣费）
         analysis_service = get_simple_analysis_service()
-        result = await analysis_service.create_analysis_task(user["id"], request)
-
-        # 提取变量，避免闭包问题
-        task_id = result["task_id"]
-        user_id = user["id"]
-
-        # 定义一个包装函数来运行异步任务
+        task_result = await analysis_service.create_analysis_task(
+            user_id=user["id"],
+            request=request,
+            metadata={
+                'price': float(PRICE),
+                'payment_status': 'PENDING'  # 待支付状态
+            }
+        )
+        
+        task_id = task_result["task_id"]
+        consume_no = f"ANA{task_id}"  # 直接用task_id作为订单号
+        
+        # 3. 后台任务 - 执行完再扣费
         async def run_analysis_task():
-            """包装函数：在后台运行分析任务"""
             try:
-                logger.info(f"🚀 [BackgroundTask] 开始执行分析任务: {task_id}")
-                logger.info(f"📝 [BackgroundTask] task_id={task_id}, user_id={user_id}")
-                logger.info(f"📝 [BackgroundTask] request={request}")
-
-                # 重新获取服务实例，确保在正确的上下文中
-                logger.info(f"🔧 [BackgroundTask] 正在获取服务实例...")
+                # 执行分析
                 service = get_simple_analysis_service()
-                logger.info(f"✅ [BackgroundTask] 服务实例获取成功: {id(service)}")
-
-                logger.info(f"🚀 [BackgroundTask] 准备调用 execute_analysis_background...")
                 await service.execute_analysis_background(
                     task_id,
-                    user_id,
+                    user["id"],
                     request
                 )
-                logger.info(f"✅ [BackgroundTask] 分析任务完成: {task_id}")
+                
+                # 获取最终状态
+                global_memory_manager = get_memory_state_manager()
+                task_status = await global_memory_manager.get_task_dict(task_id)
+                
+                # 只有成功才扣费
+                if task_status and task_status.get('status', '').upper() == 'COMPLETED':
+                    # 调用现有的consume函数扣费
+                    temp_dict = user.copy()
+                    temp_dict['hashed_password'] = 'dummy'  # 临时密码
+                    user_obj = User.model_validate(temp_dict)
+                    success, msg = await power_account_service.consume(
+                        user=user_obj,
+                        order_no=consume_no,
+                        amount=PRICE,
+                        description=f"股票分析-{request.stock_code}",
+                        metadata={
+                            'task_id': task_id,
+                            'stock_code': request.stock_code,
+                            'analysis_type': 'single'
+                        }
+                    )
+                    
+                    if success:
+                        logger.info(f"✅ 分析成功并扣费: {task_id}")
+                    else:
+                        # 扣费失败
+                        logger.error(f"❌ 分析成功但扣费失败: {task_id}, {msg}")
+                else:
+                    # 分析失败，不扣费
+                    logger.info(f"⚠️ 分析失败，不扣费: {task_id}")
+                    
             except Exception as e:
-                logger.error(f"❌ [BackgroundTask] 分析任务失败: {task_id}, 错误: {e}", exc_info=True)
-
-        # 使用 BackgroundTasks 执行异步任务
+                logger.error(f"❌ 后台任务异常: {task_id}, {e}")
+                # 异常情况也不扣费
+                await service.update_task_payment_status(task_id, 'FAILED_NO_CHARGE')
+        
         background_tasks.add_task(run_analysis_task)
-
-        logger.info(f"✅ 分析任务已在后台启动: {result}")
-
+        
         return {
             "success": True,
-            "data": result,
-            "message": "分析任务已在后台启动"
+            "data": {
+                "task_id": task_id,
+                "status": "PROCESSING",
+                "price": float(PRICE),
+                "message": "分析任务已启动，完成后扣费",
+                "check_url": f"/api/tasks/{task_id}/status"
+            }
         }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ 提交单股分析任务失败: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"❌ 提交失败: {e}")
+        raise HTTPException(status_code=500, detail="系统错误")
+
 
 @router.get("/tasks/status")
 async def get_tasks_status():
     """获取所有后台任务状态"""
     return {
-        "total_running": len(_background_tasks),
         "tasks": [
             {
                 "task_id": tid,

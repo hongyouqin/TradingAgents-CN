@@ -18,6 +18,14 @@ logger = logging.getLogger("payment")
 
 # ==================== 充值套餐（优惠档次） ====================
 RECHARGE_PACKAGES = {
+    # "PACK_000": {
+    #     "name": "测试包",
+    #     "price": 0.01,      # 支付0.01元
+    #     "power": 100000,         # 获得100000算力
+    #     "bonus": 0,          # 赠送0
+    #     "popular": False,
+    #     "description": "测试包包⚡"
+    # },
     "PACK_001": {
         "name": "体验包",
         "price": 9.90,      # 支付9.9元
@@ -220,155 +228,9 @@ async def get_recharge_orders(
         "data": orders
     }
 
-
-# ==================== 分析服务消费接口（直接扣算力） ====================
-
-@router.post("/consume/analysis")
-async def run_analysis(
-    payload: dict,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    运行分析服务 - 按次扣费
-    
-    分析类型及价格:
-    - 基础分析: 5⚡/次
-    - 深度分析: 10⚡/次
-    - 专业分析: 20⚡/次
-    
-    请求示例：
-    {
-        "analysis_type": "stock_analysis",  # stock_analysis, market_analysis, ai_forecast
-        "depth": "deep",                      # basic, deep, professional
-        "stock_code": "600519",                # 股票代码（可选）
-        "description": "茅台深度分析"          # 自定义描述（可选）
-    }
-    """
-    # 分析类型和价格映射
-    analysis_prices = {
-        "stock_analysis": {"basic": 5, "deep": 10, "professional": 20},
-        "market_analysis": {"basic": 8, "deep": 15, "professional": 30},
-        "ai_forecast": {"basic": 10, "deep": 20, "professional": 50}
-    }
-    
-    analysis_type = payload.get("analysis_type")
-    depth = payload.get("depth", "basic")
-    stock_code = payload.get("stock_code")
-    custom_desc = payload.get("description", "")
-    
-    # 验证分析类型
-    if analysis_type not in analysis_prices:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"不支持的分析类型: {analysis_type}，可选: {list(analysis_prices.keys())}"
-        )
-    
-    # 验证深度
-    if depth not in analysis_prices[analysis_type]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的深度: {depth}，可选: {list(analysis_prices[analysis_type].keys())}"
-        )
-    
-    # 获取价格
-    price = Decimal(str(analysis_prices[analysis_type][depth]))
-    
-    # 生成消费流水号
-    import time
-    consume_no = f"ANA{int(time.time() * 1000)}"
-    
-    # 构建描述
-    type_names = {
-        "stock_analysis": "股票分析",
-        "market_analysis": "市场分析",
-        "ai_forecast": "AI预测"
-    }
-    depth_names = {"basic": "基础", "deep": "深度", "professional": "专业"}
-    
-    description = custom_desc or f"{type_names.get(analysis_type, analysis_type)}-{depth_names.get(depth, depth)}"
-    if stock_code:
-        description += f" [{stock_code}]"
-    
-    # 扣减算力
-    success, msg = await power_account_service.consume(
-        user=current_user,
-        order_no=consume_no,
-        amount=price,
-        description=description,
-        metadata={
-            'consume_type': 'ANALYSIS',
-            'analysis_type': analysis_type,
-            'depth': depth,
-            'stock_code': stock_code,
-            'price': float(price)
-        }
-    )
-    
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
-    
-    # 获取最新余额
-    balance = await power_account_service.get_balance(current_user)
-    
-    # 这里可以触发实际的分析任务
-    # task_id = await analysis_service.start_analysis(payload)
-    
-    return {
-        "code": 0,
-        "message": "分析任务已启动",
-        "data": {
-            "consume_no": consume_no,
-            "analysis_type": analysis_type,
-            "depth": depth,
-            "price": float(price),
-            "balance": float(balance['balance']),
-            "task_id": f"TASK{int(time.time())}",  # 模拟任务ID
-            "estimated_time": "约30秒"
-        }
-    }
-
-
-@router.get("/consume/prices")
-async def get_analysis_prices():
-    """
-    获取分析服务价格表
-    """
-    prices = {
-        "stock_analysis": {
-            "name": "股票分析",
-            "description": "对单只股票进行技术面和基本面分析",
-            "prices": {
-                "basic": {"price": 5, "name": "基础分析", "description": "基础指标分析"},
-                "deep": {"price": 10, "name": "深度分析", "description": "深度技术分析+基本面评分"},
-                "professional": {"price": 20, "name": "专业分析", "description": "完整研究报告+预测模型"}
-            }
-        },
-        "market_analysis": {
-            "name": "市场分析",
-            "description": "对整体市场行情进行分析",
-            "prices": {
-                "basic": {"price": 8, "name": "基础分析", "description": "市场概览"},
-                "deep": {"price": 15, "name": "深度分析", "description": "板块轮动分析"},
-                "professional": {"price": 30, "name": "专业分析", "description": "市场预测报告"}
-            }
-        },
-        "ai_forecast": {
-            "name": "AI预测",
-            "description": "基于AI模型的股价预测",
-            "prices": {
-                "basic": {"price": 10, "name": "基础预测", "description": "3天预测"},
-                "deep": {"price": 20, "name": "深度预测", "description": "7天预测+置信区间"},
-                "professional": {"price": 50, "name": "专业预测", "description": "30天趋势预测"}
-            }
-        }
-    }
-    
-    return {
-        "code": 0,
-        "message": "success",
-        "data": prices
-    }
-
+@router.get("/consume/price")
+async def get_analysis_price():
+    return {"price": 1.8, "unit": "⚡", "desc": "每次分析固定扣费"}
 
 # ==================== 微信支付回调 ====================
 

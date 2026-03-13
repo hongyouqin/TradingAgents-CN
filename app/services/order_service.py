@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
 from app.core.config import settings
-from app.services.user_service import user_service, User
+from app.services.user_service import user_service
 from app.services.power_account_service import power_account_service
 from app.services.wechat_pay_service import wechat_pay_service
 
@@ -164,7 +164,7 @@ class OrderService:
         except Exception as e:
             logger.error(f"❌ 创建充值订单失败: {e}", exc_info=True)
             return None, str(e)
-    
+        
     async def prepare_recharge_payment(
         self, 
         user: Dict[str, Any], 
@@ -241,88 +241,95 @@ class OrderService:
             return None, str(e)
     
     async def handle_recharge_success(
-        self, 
-        order_no: str, 
-        transaction_id: str, 
-        paid_amount: int = None
-    ) -> Tuple[bool, str]:
-        """
-        处理充值成功回调
-        """
-        try:
-            # 查询订单
-            order = self.orders_collection.find_one({"order_no": order_no})
-            if not order:
-                return False, f"充值订单不存在: {order_no}"
-            
-            # 防止重复处理
-            if order['status'] == 'PAID':
-                logger.info(f"充值订单已处理: {order_no}")
-                return True, "订单已处理"
-            
-            if order['status'] not in ['PENDING', 'EXPIRED']:
-                return False, f"订单状态无法处理: {order['status']}"
-            
-            # 金额校验
-            if paid_amount:
-                expected_amount = int(order['price'] * 100)
-                if paid_amount != expected_amount:
-                    logger.error(f"支付金额不符: 预期={expected_amount}, 实际={paid_amount}")
-                    return False, "支付金额校验失败"
-            
-            # 获取用户对象
-            user = await user_service.get_user_by_id(order['user_id'])
-            if not user:
-                return False, f"用户不存在: {order['user_id']}"
-            
-            # 给用户增加算力（基础算力 + 赠送算力）
-            total_power = Decimal(str(order['total_power']))
-            success, msg = await power_account_service.recharge(
-                user=user,
-                order_no=order_no,
-                amount=total_power,
-                description=order.get('description', f"微信充值{total_power}⚡"),
-                metadata={
-                    'transaction_id': transaction_id,
-                    'payment_scene': order['payment_scene'],
-                    'package_id': order.get('package_id'),
-                    'package_name': order.get('package_name'),
-                    'price': order['price'],
-                    'power_amount': order['power_amount'],
-                    'bonus_amount': order.get('bonus_amount', 0)
-                }
-            )
-            
-            if not success:
-                logger.error(f"算力充值失败: {order_no}, {msg}")
-                return False, f"算力充值失败: {msg}"
-            
-            # 更新订单状态
-            now_timestamp = self._current_timestamp()
-            now_dt = datetime.utcnow()
-            
-            self.orders_collection.update_one(
-                {"order_no": order_no},
-                {
-                    "$set": {
-                        "status": "PAID",
-                        "transaction_id": transaction_id,
-                        "paid_timestamp": now_timestamp,
-                        "paid_at": now_dt,
-                        "updated_at": now_dt
+                self, 
+                order_no: str, 
+                transaction_id: str, 
+                paid_amount: int = None
+            ) -> Tuple[bool, str]:
+            """处理充值成功回调"""
+            try:
+                # 查询订单
+                order = self.orders_collection.find_one({"order_no": order_no})
+                if not order:
+                    return False, f"充值订单不存在: {order_no}"
+                
+                # 幂等性校验（核心！避免重复处理）
+                if order['status'] == 'PAID':
+                    logger.info(f"充值订单已处理: {order_no}")
+                    return True, "订单已处理"
+                
+                if order['status'] not in ['PENDING', 'EXPIRED']:
+                    return False, f"订单状态无法处理: {order['status']}"
+                
+                # 金额校验
+                if paid_amount:
+                    expected_amount = int(round(order['price'] * 100))
+                    if paid_amount != expected_amount:
+                        logger.error(f"支付金额不符: 预期={expected_amount}分, 实际={paid_amount}分")
+                        return False, "支付金额校验失败"
+                
+                # 获取用户
+                user = await user_service.get_user_by_id(order['user_id'])
+                if not user:
+                    return False, f"用户不存在: {order['user_id']}"
+                
+                # 转Decimal（匹配recharge参数）
+                total_power = Decimal(str(order['total_power']))
+                
+                # 调用充值（事务版，失败则余额不更新）
+                success, msg = await power_account_service.recharge(
+                    user=user,
+                    order_no=order_no,
+                    amount=total_power,
+                    description=order.get('description', f"微信充值{total_power}⚡"),
+                    metadata={
+                        'transaction_id': transaction_id,
+                        'payment_scene': order['payment_scene'],
+                        'package_id': order.get('package_id'),
+                        'package_name': order.get('package_name'),
+                        'price': Decimal(str(order['price'])),  # 传Decimal，内部会转字符串
+                        'power_amount': Decimal(str(order['power_amount'])),
+                        'bonus_amount': Decimal(str(order.get('bonus_amount', 0)))
                     }
-                }
-            )
-            
-            logger.info(f"✅ 充值成功处理完成: {order_no}, 用户: {user.username}, "
-                       f"金额: {order['price']}元, 获得: {total_power}⚡")
-            
-            return True, "充值成功"
-            
-        except Exception as e:
-            logger.error(f"❌ 处理充值成功回调失败: {e}")
-            return False, str(e)
-    
+                )
+                
+                if not success:
+                    logger.error(f"算力充值失败: {order_no}, {msg}")
+                    return False, f"算力充值失败: {msg}"
+                
+                # 更新订单状态（原子操作）
+                now_timestamp = self._current_timestamp()
+                now_dt = datetime.utcnow()
+                update_result = self.orders_collection.update_one(
+                    {
+                        "order_no": order_no,
+                        "status": {"$in": ["PENDING", "EXPIRED"]}
+                    },
+                    {
+                        "$set": {
+                            "status": "PAID",
+                            "transaction_id": transaction_id,
+                            "paid_timestamp": now_timestamp,
+                            "paid_at": now_dt,
+                            "updated_at": now_dt
+                        }
+                    }
+                )
+                
+                if update_result.modified_count == 0:
+                    logger.warning(f"订单{order_no}状态已被更新，无需重复处理")
+                    return True, "订单已处理"
+                
+                logger.info(
+                    f"✅ 充值成功 [订单:{order_no}] [用户:{user.id}/{user.username}] "
+                    f"[金额:{order['price']}元] [算力:{total_power}⚡] [微信交易号:{transaction_id}]"
+                )
+                return True, "充值成功"
+                
+            except Exception as e:
+                logger.error(f"❌ 处理充值成功回调失败: {e}", exc_info=True)
+                return False, str(e)
+        
     async def query_recharge_status(
         self, 
         user: Dict[str, Any], 
@@ -376,6 +383,7 @@ class OrderService:
         except Exception as e:
             logger.error(f"❌ 查询充值订单状态失败: {e}")
             return {'status': 'ERROR', 'message': str(e)}
+    
     
     async def get_user_recharge_orders(
         self, 
