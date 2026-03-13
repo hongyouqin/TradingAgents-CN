@@ -106,7 +106,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-@router.websocket("/ws/notifications")
+# @router.websocket("/ws/notifications")
 async def websocket_notifications_endpoint(
     websocket: WebSocket,
     token: str = Query(...)
