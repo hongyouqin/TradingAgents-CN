@@ -18,14 +18,14 @@ logger = logging.getLogger("payment")
 
 # ==================== 充值套餐（优惠档次） ====================
 RECHARGE_PACKAGES = {
-    # "PACK_000": {
-    #     "name": "测试包",
-    #     "price": 0.01,      # 支付0.01元
-    #     "power": 100000,         # 获得100000算力
-    #     "bonus": 0,          # 赠送0
-    #     "popular": False,
-    #     "description": "测试包包⚡"
-    # },
+    "PACK_000": {
+        "name": "测试包",
+        "price": 0.01,      # 支付0.01元
+        "power": 100000,         # 获得100000算力
+        "bonus": 0,          # 赠送0
+        "popular": False,
+        "description": "测试包包⚡"
+    },
     "PACK_001": {
         "name": "体验包",
         "price": 9.90,      # 支付9.9元
