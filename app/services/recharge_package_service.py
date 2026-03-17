@@ -104,13 +104,19 @@ class RechargePackageService:
 
         print(f"已初始化 {len(default_packages)} 个默认充值套餐")
 
+    def _process_document(self, doc: dict) -> dict:
+            """处理MongoDB文档，转换ObjectId为字符串"""
+            if doc and "_id" in doc and isinstance(doc["_id"], ObjectId):
+                doc["_id"] = str(doc["_id"])
+            return doc
+    
     async def get_active_packages(self) -> List[RechargePackage]:
         """获取所有上架套餐"""
         collection = await self._get_collection()
         cursor = collection.find({"is_active": True}).sort("sort_order", 1)
         packages = []
         async for doc in cursor:
-            packages.append(RechargePackage(**doc))
+            packages.append(RechargePackage(**self._process_document(doc)))
         return packages
 
     async def get_package_by_id(self, package_id: str) -> Optional[RechargePackage]:
@@ -118,18 +124,23 @@ class RechargePackageService:
         collection = await self._get_collection()
         doc = await collection.find_one({"package_id": package_id, "is_active": True})
         if doc:
-            return RechargePackage(**doc)
+            return RechargePackage(**self._process_document(doc))
         return None
 
     async def get_package_by_object_id(self, id: str) -> Optional[RechargePackage]:
         """根据MongoDB ObjectId获取套餐"""
         collection = await self._get_collection()
         try:
+            # 验证id是否为有效的ObjectId格式
+            if not ObjectId.is_valid(id):
+                return None
+                
             doc = await collection.find_one({"_id": ObjectId(id)})
             if doc:
-                return RechargePackage(**doc)
-        except:
-            pass
+                return RechargePackage(**self._process_document(doc))
+        except Exception as e:
+            # 可以记录日志
+            print(f"Error fetching package by object id: {e}")
         return None
 
     async def create_package(self, package_data: RechargePackageCreate) -> RechargePackage:
@@ -142,20 +153,27 @@ class RechargePackageService:
             raise ValueError(f"套餐ID {package_data.package_id} 已存在")
 
         now = datetime.utcnow()
-        doc = package_data.dict()
+        # 对于Pydantic v2
+        doc = package_data.model_dump() if hasattr(package_data, 'model_dump') else package_data.dict()
         doc["created_at"] = now
         doc["updated_at"] = now
         
         result = await collection.insert_one(doc)
-        doc["_id"] = result.inserted_id
         
-        return RechargePackage(**doc)
+        # 获取插入的文档
+        created_doc = await collection.find_one({"_id": result.inserted_id})
+        return RechargePackage(**self._process_document(created_doc))
 
     async def update_package(self, package_id: str, update_data: RechargePackageUpdate) -> Optional[RechargePackage]:
         """更新套餐"""
         collection = await self._get_collection()
         
-        update_dict = {k: v for k, v in update_data.dict(exclude_unset=True).items() if v is not None}
+        # 对于Pydantic v2
+        if hasattr(update_data, 'model_dump'):
+            update_dict = {k: v for k, v in update_data.model_dump(exclude_unset=True).items() if v is not None}
+        else:
+            update_dict = {k: v for k, v in update_data.dict(exclude_unset=True).items() if v is not None}
+            
         if not update_dict:
             return None
 
@@ -164,11 +182,11 @@ class RechargePackageService:
         result = await collection.find_one_and_update(
             {"package_id": package_id},
             {"$set": update_dict},
-            return_document=True
+            return_document=ReturnDocument.AFTER  # 使用ReturnDocument枚举
         )
         
         if result:
-            return RechargePackage(**result)
+            return RechargePackage(**self._process_document(result))
         return None
 
     async def delete_package(self, package_id: str) -> bool:
@@ -185,7 +203,6 @@ class RechargePackageService:
         collection = await self._get_collection()
         result = await collection.delete_one({"package_id": package_id})
         return result.deleted_count > 0
-
 
 # 创建单例
 recharge_package_service = RechargePackageService()
