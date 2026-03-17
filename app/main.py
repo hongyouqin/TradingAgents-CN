@@ -243,6 +243,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.getLogger("webapi").warning(f"Failed to apply dynamic settings: {e}")
 
+    try:
+        logger.info("💰 初始化充值套餐...")
+        await recharge_package_service.init_default_packages()
+        logger.info("✅ 充值套餐初始化完成")
+    except Exception as e:
+        logger.error(f"❌ 充值套餐初始化失败: {e}")
+
     # 显示配置摘要
     await _print_config_summary(logger)
 
@@ -560,7 +567,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"📰 新闻数据同步已配置（仅自选股）: {settings.NEWS_SYNC_CRON}")
 
         scheduler.start()
-
+        
         # 设置调度器实例到服务中，以便API可以管理任务
         set_scheduler_instance(scheduler)
         logger.info("✅ 调度器服务已初始化")
@@ -592,7 +599,7 @@ async def lifespan(app: FastAPI):
 
 # 创建FastAPI应用
 app = FastAPI(
-    title="TradingAgents-CN API",
+    title="FinAgents API",
     description="股票分析与批量队列系统 API",
     version=get_version(),
     docs_url="/docs" if settings.DEBUG else None,
@@ -644,11 +651,6 @@ async def log_requests(request: Request, call_next):
 
     return response
 
-
-@app.on_event("startup")
-async def startup_event():
-    # 初始化充值套餐
-    await recharge_package_service.init_default_packages()
 
 
 # 全局异常处理

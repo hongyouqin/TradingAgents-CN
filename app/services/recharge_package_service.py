@@ -15,7 +15,7 @@ class RechargePackageService:
 
     async def _get_collection(self):
         """获取集合"""
-        db = await get_database()
+        db = get_database()
         return db[self.collection_name]
 
     async def init_default_packages(self):
