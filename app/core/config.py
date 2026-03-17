@@ -46,7 +46,9 @@ class Settings(BaseSettings):
     _wechat_app_id: Optional[str] = None
     _wechat_mch_id: Optional[str] = None
     _wechat_api_key: Optional[str] = None
-    _wechat_notify_url: Optional[str] = None    
+    _wechat_notify_url: Optional[str] = None
+    _wechat_h5_redirect_url: Optional[str] = None
+    
     
     # 阿里云短信RAMKey配置
     _sms_access_key_id: Optional[str] = None
@@ -94,6 +96,13 @@ class Settings(BaseSettings):
         if self._wechat_notify_url is None:
             self._wechat_notify_url = os.environ.get('WECHAT_NOTIFY_URL') or self.WECHAT_NOTIFY_URL
         return self._wechat_notify_url
+    
+    @property
+    def WECHAT_H5_REDIRECT_URL(self) -> Optional[str]:
+        """延迟加载微信H5支付重定向URL"""
+        if self._wechat_h5_redirect_url is None:
+            self._wechat_h5_redirect_url = os.environ.get('WECHAT_H5_REDIRECT_URL') or self.WECHAT_H5_REDIRECT_URL
+        return self._wechat_h5_redirect_url
     
     def validate_wechat_config(self) -> tuple[bool, str]:
         """验证微信支付配置是否完整"""

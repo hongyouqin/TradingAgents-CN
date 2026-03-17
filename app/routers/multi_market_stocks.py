@@ -229,7 +229,7 @@ async def get_stock_quote(
     market = market.upper()
     if market not in ["CN", "HK", "US"]:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_200_OK,
             detail=f"不支持的市场类型: {market}"
         )
     
@@ -241,7 +241,7 @@ async def get_stock_quote(
         
         if not quote:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_200_OK,
                 detail=f"未找到股票行情: {market}:{code}"
             )
         

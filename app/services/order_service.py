@@ -1,4 +1,4 @@
-# app/services/order_service.py
+
 import uuid
 import time
 from decimal import Decimal
@@ -20,7 +20,7 @@ except ImportError:
 logger = get_logger('order_service')
 
 class OrderService:
-    """订单服务 - 专门处理充值订单（需要微信支付）"""
+    """订单服务 - 支持 JSAPI/NATIVE/H5 三种支付方式"""
     
     def __init__(self):
         from pymongo import MongoClient
@@ -48,6 +48,17 @@ class OrderService:
         """获取当前时间戳（毫秒）"""
         return int(time.time() * 1000)
     
+    def _generate_h5_scene_info(self) -> str:
+        """生成H5支付所需的scene_info参数（微信要求）"""
+        # 需替换为你的前端备案域名和网站名称
+        return f'''{{
+            "h5_info": {{
+                "type": "WAP",
+                "wap_url": "{settings.FRONTEND_URL}",
+                "wap_name": "算力充值"
+            }}
+        }}'''
+    
     async def create_recharge_order(
         self, 
         user, 
@@ -56,31 +67,26 @@ class OrderService:
         client_ip: str
     ) -> Tuple[Optional[Dict], str]:
         """
-        创建充值订单
-        :param user: 用户对象
-        :param recharge_data: 充值数据
-            {
-                "package_id": "PACK_002",        # 套餐ID
-                "package_name": "标准包",          # 套餐名称
-                "price": 19.80,                    # 支付金额（人民币）
-                "power_amount": 20,                 # 基础算力
-                "bonus_amount": 0,                   # 赠送算力
-                "total_power": 20,                   # 总获得算力
-                "description": "19.8元充值20⚡"      # 描述
-            }
-        :param payment_scene: JSAPI或NATIVE
-        :param client_ip: 客户端IP
-        :return: (订单信息, 错误消息)
+        创建充值订单（新增支持H5支付场景）
+        :param payment_scene: JSAPI/NATIVE/H5
         """
         try:
-            # 确定交易类型
-            trade_type = 'JSAPI' if payment_scene == 'JSAPI' else 'NATIVE'
+            # 确定交易类型：H5对应MWEB，JSAPI对应JSAPI，NATIVE对应NATIVE
+            trade_type_map = {
+                'JSAPI': 'JSAPI',
+                'NATIVE': 'NATIVE',
+                'H5': 'MWEB'  # H5支付对应的微信trade_type
+            }
+            if payment_scene not in trade_type_map:
+                return None, f"不支持的支付场景: {payment_scene}，仅支持JSAPI/NATIVE/H5"
+            
+            trade_type = trade_type_map[payment_scene]
             
             # 获取用户信息
             user_id = str(user['id']) if isinstance(user, dict) else str(user.id)
             username = user['username'] if isinstance(user, dict) else user.username
             
-            logger.info(f"👤 创建充值订单 - 用户ID: {user_id}, 用户名: {username}")
+            logger.info(f"👤 创建充值订单 - 用户ID: {user_id}, 用户名: {username}, 支付场景: {payment_scene}")
             
             # 时间戳
             now_timestamp = self._current_timestamp()
@@ -90,7 +96,7 @@ class OrderService:
             now_dt = datetime.utcnow()
             expired_dt = now_dt + timedelta(minutes=30)
             
-            # 创建充值订单文档
+            # 创建充值订单文档（新增H5相关字段）
             order_doc = {
                 "order_no": self._generate_order_no(),
                 "user_id": user_id,
@@ -109,7 +115,7 @@ class OrderService:
                 "bonus_amount": float(recharge_data.get('bonus_amount', 0)),  # 赠送算力
                 "total_power": float(recharge_data['total_power']),  # 总获得算力
                 
-                # 支付信息
+                # 支付信息（兼容H5）
                 "payment_scene": payment_scene,
                 "trade_type": trade_type,
                 "status": "PENDING",
@@ -125,9 +131,10 @@ class OrderService:
                 "expired_at": expired_dt,
                 "updated_at": now_dt,
                 
-                # 微信支付相关（后续更新）
+                # 微信支付相关（新增mweb_url字段用于H5）
                 "prepay_id": None,
                 "code_url": None,
+                "mweb_url": None,  # H5支付跳转链接
                 "transaction_id": None,
                 "paid_timestamp": None,
                 "paid_at": None,
@@ -142,7 +149,7 @@ class OrderService:
             
             logger.info(f"✅ 充值订单创建成功: {order_doc['order_no']}, "
                        f"用户: {username}, 金额: {recharge_data['price']}元, "
-                       f"获得: {recharge_data['total_power']}⚡")
+                       f"获得: {recharge_data['total_power']}⚡, 支付场景: {payment_scene}")
             
             # 返回前端需要的字段
             return {
@@ -155,7 +162,8 @@ class OrderService:
                 "created_timestamp": now_timestamp,
                 "expired_timestamp": expired_timestamp,
                 "expired_at": expired_dt.isoformat() + 'Z',
-                "status": "PENDING"
+                "status": "PENDING",
+                "payment_scene": payment_scene  # 新增返回支付场景
             }, ""
             
         except KeyError as e:
@@ -169,10 +177,12 @@ class OrderService:
         self, 
         user: Dict[str, Any], 
         order_no: str, 
-        openid: str = None
+        openid: str = None,
+        redirect_url: str = None  # 新增：H5支付完成后跳转地址
     ) -> Tuple[Optional[Dict], str]:
         """
-        准备充值支付 - 调用微信统一下单
+        准备充值支付（新增支持H5支付）
+        :param redirect_url: H5支付完成后跳转的前端地址（需备案）
         """
         try:
             # 查询订单
@@ -201,34 +211,54 @@ class OrderService:
                 )
                 return None, "充值订单已过期"
             
-            # 调用微信统一下单
-            total_fee = int(order['price'] * 100)  # 元转分，使用price字段
-            result = await wechat_pay_service.unified_order(
-                out_trade_no=order_no,
-                total_fee=total_fee,
-                body=order.get('description', f"充值{order['total_power']}⚡")[:128],
-                trade_type=order['trade_type'],
-                openid=openid if order['trade_type'] == 'JSAPI' else None,
-                spbill_create_ip=order['client_ip']
-            )
+            # 调用微信统一下单（兼容H5）
+            total_fee = int(order['price'] * 100)  # 元转分
+            unified_order_params = {
+                "out_trade_no": order_no,
+                "total_fee": total_fee,
+                "body": order.get('description', f"充值{order['total_power']}⚡")[:128],
+                "trade_type": order['trade_type'],
+                "openid": openid if order['trade_type'] == 'JSAPI' else None,
+                "spbill_create_ip": order['client_ip']
+            }
             
-            print(f"==信支付======{result}")
+            # H5支付额外参数：scene_info（微信必填）
+            if order['trade_type'] == 'MWEB':
+                unified_order_params['scene_info'] = self._generate_h5_scene_info()
+            
+            # 调用微信统一下单
+            result = await wechat_pay_service.unified_order(**unified_order_params)
+            
+            logger.info(f"📱 微信统一下单结果: {result}, 订单号: {order_no}, 支付类型: {order['trade_type']}")
             if result.get('return_code') != 'SUCCESS' or result.get('result_code') != 'SUCCESS':
                 return None, f"微信支付下单失败: {result.get('return_msg')}"
             
-            # 更新订单
+            # 更新订单（新增mweb_url字段）
             update_data = {
                 "updated_at": datetime.utcnow()
             }
             payment_params = {}
             
             if order['trade_type'] == 'JSAPI':
+                # JSAPI支付：生成调起参数
                 update_data['prepay_id'] = result.get('prepay_id')
                 payment_params = wechat_pay_service.generate_jsapi_params(result.get('prepay_id'))
-            else:  # NATIVE
+            elif order['trade_type'] == 'NATIVE':
+                # NATIVE支付：返回二维码地址
                 update_data['code_url'] = result.get('code_url')
                 payment_params = {'code_url': result.get('code_url')}
+            elif order['trade_type'] == 'MWEB':
+                # H5支付：返回跳转链接（拼接回跳地址）
+                mweb_url = result.get('mweb_url')
+                if redirect_url:
+                    mweb_url += f"&redirect_url={redirect_url}"
+                update_data['mweb_url'] = mweb_url
+                payment_params = {
+                    'mweb_url': mweb_url,  # H5支付跳转链接
+                    'redirect_url': redirect_url  # 返回回跳地址
+                }
             
+            # 更新订单数据
             self.orders_collection.update_one(
                 {"order_no": order_no},
                 {"$set": update_data}
@@ -237,7 +267,7 @@ class OrderService:
             return payment_params, ""
             
         except Exception as e:
-            logger.error(f"❌ 准备充值支付失败: {e}")
+            logger.error(f"❌ 准备充值支付失败: {e}", exc_info=True)
             return None, str(e)
     
     async def handle_recharge_success(
@@ -246,7 +276,7 @@ class OrderService:
                 transaction_id: str, 
                 paid_amount: int = None
             ) -> Tuple[bool, str]:
-            """处理充值成功回调"""
+            """处理充值成功回调（无需修改，H5支付回调逻辑与其他方式一致）"""
             try:
                 # 查询订单
                 order = self.orders_collection.find_one({"order_no": order_no})
@@ -322,7 +352,7 @@ class OrderService:
                 
                 logger.info(
                     f"✅ 充值成功 [订单:{order_no}] [用户:{user.id}/{user.username}] "
-                    f"[金额:{order['price']}元] [算力:{total_power}⚡] [微信交易号:{transaction_id}]"
+                    f"[金额:{order['price']}元] [算力:{total_power}⚡] [微信交易号:{transaction_id}] [支付场景:{order['payment_scene']}]"
                 )
                 return True, "充值成功"
                 
@@ -336,7 +366,7 @@ class OrderService:
         order_no: str
     ) -> Dict[str, Any]:
         """
-        查询充值订单状态
+        查询充值订单状态（新增返回H5相关字段）
         """
         try:
             order = self.orders_collection.find_one({
@@ -371,8 +401,17 @@ class OrderService:
                 'description': order.get('description'),
                 'created_timestamp': order.get('created_timestamp'),
                 'expired_timestamp': order.get('expired_timestamp'),
-                'is_expired': is_expired
+                'is_expired': is_expired,
+                'payment_scene': order.get('payment_scene')  # 新增返回支付场景
             }
+            
+            # 按支付场景返回对应字段
+            if order['trade_type'] == 'JSAPI':
+                result['prepay_id'] = order.get('prepay_id')
+            elif order['trade_type'] == 'NATIVE':
+                result['code_url'] = order.get('code_url')
+            elif order['trade_type'] == 'MWEB':
+                result['mweb_url'] = order.get('mweb_url')
             
             if order['status'] == 'PAID':
                 result['paid_timestamp'] = order.get('paid_timestamp')
@@ -392,7 +431,7 @@ class OrderService:
         limit: int = 20
     ) -> List[Dict]:
         """
-        获取用户的充值订单列表
+        获取用户的充值订单列表（新增支付场景字段）
         """
         try:
             cursor = self.orders_collection.find(
@@ -412,7 +451,7 @@ class OrderService:
                 else:
                     order['is_expired'] = False
                 
-                # 只返回需要的字段
+                # 只返回需要的字段（新增支付场景）
                 orders.append({
                     'order_no': order['order_no'],
                     'status': order['status'],
@@ -425,7 +464,8 @@ class OrderService:
                     'created_timestamp': order.get('created_timestamp'),
                     'expired_timestamp': order.get('expired_timestamp'),
                     'paid_timestamp': order.get('paid_timestamp'),
-                    'is_expired': order.get('is_expired', False)
+                    'is_expired': order.get('is_expired', False),
+                    'payment_scene': order.get('payment_scene')  # 新增
                 })
             
             return orders

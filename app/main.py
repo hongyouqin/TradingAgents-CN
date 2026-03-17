@@ -58,6 +58,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from app.services.quotes_ingestion_service import QuotesIngestionService
 from app.routers import paper as paper_router
+from app.services.recharge_package_service import recharge_package_service
 
 
 def get_version() -> str:
@@ -642,6 +643,12 @@ async def log_requests(request: Request, call_next):
     logger.info(f"{status_emoji} {request.method} {request.url.path} - 状态: {response.status_code} - 耗时: {process_time:.3f}s")
 
     return response
+
+
+@app.on_event("startup")
+async def startup_event():
+    # 初始化充值套餐
+    await recharge_package_service.init_default_packages()
 
 
 # 全局异常处理

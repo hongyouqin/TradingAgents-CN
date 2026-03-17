@@ -1,7 +1,6 @@
-
 from decimal import Decimal
 import logging
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
@@ -10,92 +9,43 @@ from app.routers.auth_db import get_current_user
 from app.services.wechat_pay_service import wechat_pay_service
 from app.services.order_service import order_service
 from app.services.power_account_service import power_account_service
-
+from app.services.recharge_package_service import recharge_package_service
+from app.models.recharge_package import RechargePackage, RechargePackageCreate, RechargePackageUpdate
+from app.core.config import settings
 
 
 router = APIRouter(prefix="/api/payment", tags=["支付接口"])
 logger = logging.getLogger("payment")
 
-# ==================== 充值套餐（优惠档次） ====================
-RECHARGE_PACKAGES = {
-    "PACK_000": {
-        "name": "测试包",
-        "price": 0.01,      # 支付0.01元
-        "power": 100000,         # 获得100000算力
-        "bonus": 0,          # 赠送0
-        "popular": False,
-        "description": "测试包包⚡"
-    },
-    "PACK_001": {
-        "name": "体验包",
-        "price": 9.90,      # 支付9.9元
-        "power": 10,         # 获得10算力
-        "bonus": 0,          # 赠送0
-        "popular": False,
-        "description": "9.9元充值10⚡"
-    },
-    "PACK_002": {
-        "name": "标准包",
-        "price": 19.80,      # 支付19.8元
-        "power": 20,          # 获得20算力
-        "bonus": 0,
-        "popular": True,
-        "description": "19.8元充值20⚡"
-    },
-    "PACK_003": {
-        "name": "畅享包",
-        "price": 49.00,      # 支付49元
-        "power": 50,          # 获得50算力
-        "bonus": 2,           # 赠送2算力
-        "popular": False,
-        "description": "49元充值50⚡+赠送2⚡"
-    },
-    "PACK_004": {
-        "name": "尊享包",
-        "price": 98.00,      # 支付98元
-        "power": 100,         # 获得100算力
-        "bonus": 5,           # 赠送5算力
-        "popular": True,
-        "description": "98元充值100⚡+赠送5⚡"
-    },
-    "PACK_005": {
-        "name": "企业包",
-        "price": 198.00,     # 支付198元
-        "power": 200,         # 获得200算力
-        "bonus": 15,          # 赠送15算力
-        "popular": False,
-        "description": "198元充值200⚡+赠送15⚡"
-    },
-}
 
+# ==================== 充值套餐管理（从MongoDB读取） ====================
 
 @router.get("/recharge/packages")
 async def get_recharge_packages():
     """
-    获取充值套餐列表（优惠档次）
+    获取充值套餐列表（从MongoDB读取）
     """
-    packages = []
-    for pid, info in RECHARGE_PACKAGES.items():
-        total_power = info["power"] + info.get("bonus", 0)
-        packages.append({
-            "id": pid,
-            "name": info["name"],
-            "price": info["price"],
-            "power": info["power"],
-            "bonus": info.get("bonus", 0),
-            "total_power": total_power,
-            "popular": info.get("popular", False),
-            "description": info["description"],
-            "unit_price": round(info["price"] / total_power, 2)  # 单价（元/算力）
-        })
+    packages = await recharge_package_service.get_active_packages()
     
-    # 按价格排序
-    packages.sort(key=lambda x: x["price"])
+    result = []
+    for pkg in packages:
+        result.append({
+            "id": pkg.package_id,
+            "name": pkg.name,
+            "price": pkg.price,
+            "power": pkg.power,
+            "bonus": pkg.bonus,
+            "total_power": pkg.total_power,
+            "popular": pkg.popular,
+            "description": pkg.description,
+            "unit_price": pkg.unit_price,
+            "sort_order": pkg.sort_order
+        })
     
     return {
         "code": 0,
         "message": "success",
-        "data": packages
+        "data": result
     }
 
 
@@ -108,12 +58,12 @@ async def create_recharge_order(
     current_user: User = Depends(get_current_user)
 ):
     """
-    创建充值订单 - 选择套餐
+    创建充值订单 - 支持H5支付场景
     
     请求示例:
     {
         "package_id": "PACK_002",    # 套餐ID
-        "payment_scene": "NATIVE"     # JSAPI或NATIVE
+        "payment_scene": "H5"        # JSAPI/NATIVE/H5
     }
     """
     client_ip = request.client.host
@@ -126,22 +76,24 @@ async def create_recharge_order(
     if not payment_scene:
         raise HTTPException(status_code=400, detail="缺少 payment_scene 参数")
     
-    # 获取套餐信息
-    package = RECHARGE_PACKAGES.get(package_id)
-    if not package:
-        raise HTTPException(status_code=400, detail="无效的套餐ID")
+    # 校验支付场景
+    if payment_scene not in ["JSAPI", "NATIVE", "H5"]:
+        raise HTTPException(status_code=400, detail="payment_scene 仅支持JSAPI/NATIVE/H5")
     
-    total_power = package["power"] + package.get("bonus", 0)
+    # 从MongoDB获取套餐信息
+    package = await recharge_package_service.get_package_by_id(package_id)
+    if not package:
+        raise HTTPException(status_code=400, detail="无效的套餐ID或套餐已下架")
     
     recharge_data = {
         "order_type": "RECHARGE",
-        "package_id": package_id,
-        "package_name": package["name"],
-        "price": package["price"],              # 支付金额
-        "power_amount": package["power"],        # 基础算力
-        "bonus_amount": package.get("bonus", 0), # 赠送算力
-        "total_power": total_power,              # 总获得算力
-        "description": package["description"]
+        "package_id": package.package_id,
+        "package_name": package.name,
+        "price": package.price,              # 支付金额
+        "power_amount": package.power,        # 基础算力
+        "bonus_amount": package.bonus,        # 赠送算力
+        "total_power": package.total_power,   # 总获得算力
+        "description": package.description
     }
     
     # 创建充值订单
@@ -160,13 +112,14 @@ async def create_recharge_order(
         "message": "充值订单创建成功",
         "data": {
             "order_no": order['order_no'],
-            "package_name": package["name"],
+            "package_name": package.name,
             "price": order['price'],
             "power_amount": order['power_amount'],
             "bonus_amount": order.get('bonus_amount', 0),
             "total_power": order['total_power'],
             "expired_timestamp": order['expired_timestamp'],
-            "expired_at": order['expired_at']
+            "expired_at": order['expired_at'],
+            "payment_scene": order['payment_scene']
         }
     }
 
@@ -174,16 +127,25 @@ async def create_recharge_order(
 @router.post("/recharge/{order_no}/prepare")
 async def prepare_recharge_payment(
     order_no: str,
+    request: Request,
     openid: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """
-    准备充值支付 - 调用微信统一下单
+    准备充值支付 - 支持H5支付
+    
+    H5支付会返回mweb_url，前端跳转至该地址完成支付
     """
+    # 获取H5支付回跳地址（前端传入）
+    payload = await request.json()
+    redirect_url = payload.get("redirect_url", settings.FRONTEND_URL)
+    
+    # 调用订单服务准备支付（传递回跳地址）
     payment_params, error = await order_service.prepare_recharge_payment(
         user=current_user,
         order_no=order_no,
-        openid=openid
+        openid=openid,
+        redirect_url=redirect_url
     )
     
     if error:
@@ -228,16 +190,19 @@ async def get_recharge_orders(
         "data": orders
     }
 
+
 @router.get("/consume/price")
 async def get_analysis_price():
-    return {"price": 1.8, "unit": "⚡", "desc": "每次分析固定扣费"}
+    """获取消费价格"""
+    return {"price": 1.8, "unit": "⚡", "desc": "分析一份报告需要消耗的算力"}
+
 
 # ==================== 微信支付回调 ====================
 
 @router.post("/wxpay/notify")
 async def wechat_pay_notify(request: Request):
     """
-    微信支付回调接口 - 处理充值成功
+    微信支付回调接口
     """
     body = await request.body()
     xml_data = body.decode('utf-8')
@@ -282,7 +247,7 @@ async def get_balance(current_user: User = Depends(get_current_user)):
     获取用户算力余额
     """
     temp_dict = current_user.copy()
-    temp_dict['hashed_password'] = 'dummy'  # 临时密码
+    temp_dict['hashed_password'] = 'dummy'
     user_obj = User.model_validate(temp_dict)
     balance = await power_account_service.get_balance(user_obj)
     return {
@@ -319,7 +284,7 @@ async def get_transactions(
     transactions = await power_account_service.get_transactions(
         user_obj, 
         limit,
-        transaction_type=filter_type  # None 表示不筛选
+        transaction_type=filter_type
     )
     
     # 格式化返回
@@ -344,4 +309,77 @@ async def get_transactions(
             "total": len(result),
             "transactions": result
         }
+    }
+
+
+# ==================== 后台管理接口（可选） ====================
+
+@router.post("/admin/packages", dependencies=[Depends(get_current_user)])  # 需要管理员权限
+async def create_package(
+    package_data: RechargePackageCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    【管理员】创建新套餐
+    """
+    # 检查管理员权限（需要根据你的用户模型判断）
+    # if not current_user.is_admin:
+    #     raise HTTPException(status_code=403, detail="需要管理员权限")
+    
+    try:
+        package = await recharge_package_service.create_package(package_data)
+        return {
+            "code": 0,
+            "message": "套餐创建成功",
+            "data": package.dict()
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/admin/packages/{package_id}", dependencies=[Depends(get_current_user)])
+async def update_package(
+    package_id: str,
+    update_data: RechargePackageUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    【管理员】更新套餐
+    """
+    package = await recharge_package_service.update_package(package_id, update_data)
+    if not package:
+        raise HTTPException(status_code=404, detail="套餐不存在")
+    
+    return {
+        "code": 0,
+        "message": "套餐更新成功",
+        "data": package.dict()
+    }
+
+
+@router.delete("/admin/packages/{package_id}", dependencies=[Depends(get_current_user)])
+async def delete_package(
+    package_id: str,
+    hard_delete: bool = Query(False, description="是否硬删除"),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    【管理员】删除套餐（默认软删除）
+    """
+    if hard_delete:
+        # 硬删除（谨慎使用）
+        success = await recharge_package_service.hard_delete_package(package_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="套餐不存在")
+        message = "套餐已永久删除"
+    else:
+        # 软删除
+        success = await recharge_package_service.delete_package(package_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="套餐不存在")
+        message = "套餐已下架"
+    
+    return {
+        "code": 0,
+        "message": message
     }
