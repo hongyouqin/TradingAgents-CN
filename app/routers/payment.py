@@ -4,6 +4,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
+from app.models.prepare_payment_request import PreparePaymentRequest
 from app.models.user import User
 from app.routers.auth_db import get_current_user
 from app.services.wechat_pay_service import wechat_pay_service
@@ -127,20 +128,26 @@ async def create_recharge_order(
 @router.post("/recharge/{order_no}/prepare")
 async def prepare_recharge_payment(
     order_no: str,
-    request: Request,
+    payment_request: Optional[PreparePaymentRequest] = None,  # 使用模型
     openid: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """
     准备充值支付 - 支持H5支付
     
-    H5支付会返回mweb_url，前端跳转至该地址完成支付
+    - **order_no**: 订单号
+    - **redirect_url**: H5支付回跳地址（可选）
     """
-    # 获取H5支付回跳地址（前端传入）
-    payload = await request.json()
-    redirect_url = payload.get("redirect_url", settings.WECHAT_H5_REDIRECT_URL)
+    # 获取redirect_url
+    redirect_url = None
+    if payment_request:
+        redirect_url = payment_request.redirect_url
     
-    # 调用订单服务准备支付（传递回跳地址）
+    # 如果没有传则使用默认值
+    if not redirect_url:
+        redirect_url = settings.WECHAT_H5_REDIRECT_URL
+    
+    # 调用订单服务准备支付
     payment_params, error = await order_service.prepare_recharge_payment(
         user=current_user,
         order_no=order_no,
@@ -156,7 +163,6 @@ async def prepare_recharge_payment(
         "message": "success",
         "data": payment_params
     }
-
 
 @router.get("/recharge/{order_no}/status")
 async def query_recharge_status(
