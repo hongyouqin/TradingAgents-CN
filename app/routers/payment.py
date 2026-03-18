@@ -138,7 +138,7 @@ async def prepare_recharge_payment(
     """
     # 获取H5支付回跳地址（前端传入）
     payload = await request.json()
-    redirect_url = payload.get("redirect_url", settings.FRONTEND_URL)
+    redirect_url = payload.get("redirect_url", settings.WECHAT_H5_REDIRECT_URL)
     
     # 调用订单服务准备支付（传递回跳地址）
     payment_params, error = await order_service.prepare_recharge_payment(

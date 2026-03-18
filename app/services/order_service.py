@@ -54,7 +54,7 @@ class OrderService:
         return f'''{{
             "h5_info": {{
                 "type": "WAP",
-                "wap_url": "{settings.FRONTEND_URL}",
+                "wap_url": "{settings.WECHAT_H5_REDIRECT_URL}",
                 "wap_name": "算力充值"
             }}
         }}'''
