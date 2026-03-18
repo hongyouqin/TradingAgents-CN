@@ -27,6 +27,7 @@ from app.routers import notifications as notifications_router
 from app.routers import websocket_notifications as websocket_notifications_router
 from app.routers import scheduler as scheduler_router
 from app.services.basics_sync_service import get_basics_sync_service
+from app.services.memory_state_manager import get_memory_state_manager
 from app.services.multi_source_basics_sync_service import MultiSourceBasicsSyncService
 from app.services.scheduler_service import set_scheduler_instance
 from app.worker.tushare_sync_service import (
@@ -201,6 +202,56 @@ async def _print_config_summary(logger):
     except Exception as e:
         logger.error(f"Failed to print config summary: {e}")
 
+# 定时任务：清理过期的内存状态和僵尸任务
+async def clean_tasks(scheduler: AsyncIOScheduler, logger: logging.Logger):
+    """
+    初始化清理任务（纯异步版本，适配FastAPI事件循环）
+    直接在现有事件循环中执行，不创建新循环
+    """
+    # 异步睡眠（非阻塞），等待系统稳定
+    await asyncio.sleep(10)
+    logger.info("🧹 Running initial cleanup of old tasks and zombie tasks...")
+    
+    # 获取内存管理器实例
+    memory_manager = get_memory_state_manager()
+    
+    # 立即执行一次初始化清理
+    try:
+        old_tasks_count = await memory_manager.cleanup_old_tasks(max_age_hours=24)
+        zombie_tasks_count = await memory_manager.cleanup_zombie_tasks(max_running_hours=2)
+        logger.info(f"🧹 初始化清理完成 - 旧任务: {old_tasks_count}个, 僵尸任务: {zombie_tasks_count}个")
+    except Exception as e:
+        logger.error(f"⚠️ 初始化清理任务失败: {e}", exc_info=True)
+    
+    # 添加定时任务（仅添加，不启动调度器）
+    try:
+        # 每小时清理旧任务（添加唯一ID防止重复）
+        scheduler.add_job(
+            memory_manager.cleanup_old_tasks,
+            'interval',
+            hours=1,
+            args=[24],
+            id="memory_cleanup_old_tasks",
+            replace_existing=True,
+            name="清理24小时前的旧任务"
+        )
+        
+        # 每30分钟清理僵尸任务
+        scheduler.add_job(
+            memory_manager.cleanup_zombie_tasks,
+            'interval',
+            minutes=30,
+            args=[2],
+            id="memory_cleanup_zombie_tasks",
+            replace_existing=True,
+            name="清理运行超过2小时的僵尸任务"
+        )
+        
+        logger.info("✅ 内存任务清理定时任务已配置完成")
+    except Exception as e:
+        logger.error(f"⚠️ 添加定时任务失败: {e}", exc_info=True)
+    
+    
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -462,6 +513,10 @@ async def lifespan(app: FastAPI):
             id="akshare_status_check",
             name="数据源状态检查（AKShare）"
         )
+        
+        # 立即运行一次清理任务，之后每小时清理一次旧任务，每30分钟清理一次僵尸任务
+        asyncio.create_task(clean_tasks(scheduler, logger))
+        
         if not (settings.AKSHARE_UNIFIED_ENABLED and settings.AKSHARE_STATUS_CHECK_ENABLED):
             scheduler.pause_job("akshare_status_check")
             logger.info(f"⏸️ AKShare状态检查已添加但暂停: {settings.AKSHARE_STATUS_CHECK_CRON}")

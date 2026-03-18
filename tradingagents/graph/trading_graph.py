@@ -920,7 +920,7 @@ class TradingAgentsGraph:
                         if current_node_name and current_node_start:
                             elapsed = time.time() - current_node_start
                             node_timings[current_node_name] = elapsed
-                            logger.info(f"⏱️ [{current_node_name}] 耗时: {elapsed:.2f}秒")
+                            logger.info(f"⏱️当前节点 [{current_node_name}] 耗时: {elapsed:.2f}秒")
 
                         # 开始新节点计时
                         current_node_name = node_name
