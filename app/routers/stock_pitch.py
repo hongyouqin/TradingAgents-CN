@@ -295,7 +295,6 @@ async def get_daily_pitch(
     获取指定日期的股票推荐
     
     - **date**: 查询日期 (格式: YYYY-MM-DD)
-    - **collection_name**: MongoDB集合名称
     - **limit**: 返回记录数限制（最多100条）
     - **include_stats**: 是否包含该日期的统计数据
     """
@@ -428,7 +427,6 @@ async def get_latest_pitch(
         # 调用daily-pitch接口获取数据
         return await get_daily_pitch(
             date=date_str,
-            collection_name=collection_name,
             limit=limit,
             include_stats=include_stats
         )
