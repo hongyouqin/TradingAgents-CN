@@ -17,6 +17,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # 初始化TradingAgents日志系统
+from app.utils.task_status_helper import TaskStatusHelper
 from tradingagents.utils.logging_init import init_logging
 init_logging()
 
@@ -2145,181 +2146,66 @@ class SimpleAnalysisService:
         - 按开始时间倒序排列
         """
         try:
-            task_status = None
-            if status:
-                try:
-                    status_mapping = {
-                        "processing": "running",
-                        "pending": "pending",
-                        "completed": "completed",
-                        "failed": "failed",
-                        "cancelled": "cancelled"
-                    }
-                    mapped_status = status_mapping.get(status, status)
-                    task_status = TaskStatus(mapped_status)
-                except ValueError:
-                    logger.warning(f"⚠️ [Tasks] 无效的状态值: {status}")
-                    task_status = None
+            # 使用 TaskStatusHelper 获取查询条件
+            mem_status, db_status = TaskStatusHelper.get_conditions(status)
+            logger.info(f"📋 [Tasks] list_all_tasks 状态映射: 前端={status}, 内存查询={mem_status}, 数据库查询={db_status}")
 
             # 1) 从内存读取所有任务
-            logger.info(f"📋 [Tasks] 准备从内存读取所有任务: status={status}, limit={limit}, offset={offset}")
-            tasks_in_mem = await self.memory_manager.list_all_tasks(
-                status=task_status,
-                limit=limit * 2,
-                offset=0
-            )
-            logger.info(f"📋 [Tasks] 内存返回数量: {len(tasks_in_mem)}")
+            logger.info(f"📋 [Tasks] 准备从内存读取所有任务: status={status} (内存查询用: {mem_status}), limit={limit}, offset={offset}")
+            
+            tasks_in_mem = []
+            try:
+                tasks_in_mem = await self.memory_manager.list_all_tasks(
+                    status=mem_status,  # 使用内存查询条件
+                    limit=limit * 2,
+                    offset=0
+                )
+                logger.info(f"📋 [Tasks] 内存返回数量: {len(tasks_in_mem)}")
+                
+                # 调试：打印内存中的任务
+                if tasks_in_mem:
+                    for task in tasks_in_mem[:3]:
+                        logger.info(f"  📌 内存任务: {task.get('task_id')} - {task.get('status')} - {task.get('progress')}%")
+            except Exception as e:
+                logger.error(f"❌ 内存查询失败: {e}", exc_info=True)
+                tasks_in_mem = []
 
             # 2) 从 MongoDB 读取任务
-            db = get_mongo_db()
-            collection = db["analysis_tasks"]
-
-            query = {}
-            if task_status:
-                query["status"] = task_status.value
-
-            count = await collection.count_documents(query)
-            logger.info(f"📋 [Tasks] MongoDB 任务总数: {count}")
-
-            cursor = collection.find(query).sort("start_time", -1).limit(limit * 2)
-            tasks_from_db = []
-            async for doc in cursor:
-                doc.pop("_id", None)
-                tasks_from_db.append(doc)
-
-            logger.info(f"📋 [Tasks] MongoDB 返回数量: {len(tasks_from_db)}")
-
-            # 3) 合并任务（内存优先）
-            task_dict = {}
-
-            # 先添加 MongoDB 中的任务
-            for task in tasks_from_db:
-                task_id = task.get("task_id")
-                if task_id:
-                    task_dict[task_id] = task
-
-            # 再添加内存中的任务（覆盖 MongoDB 中的同名任务）
-            for task in tasks_in_mem:
-                task_id = task.get("task_id")
-                if task_id:
-                    task_dict[task_id] = task
-
-            # 转换为列表并按时间排序
-            merged_tasks = list(task_dict.values())
-            merged_tasks.sort(key=lambda x: x.get('start_time', ''), reverse=True)
-
-            # 分页
-            results = merged_tasks[offset:offset + limit]
-
-            # 为结果补齐股票名称
-            results = self._enrich_stock_names(results)
-            logger.info(f"📋 [Tasks] 合并后返回数量: {len(results)} (内存: {len(tasks_in_mem)}, MongoDB: {count})")
-            return results
-        except Exception as outer_e:
-            logger.error(f"❌ list_all_tasks 外层异常: {outer_e}", exc_info=True)
-            return []
-
-    async def list_user_tasks(
-        self,
-        user_id: str,
-        status: Optional[str] = None,
-        limit: int = 20,
-        offset: int = 0
-    ) -> List[Dict[str, Any]]:
-        """获取用户任务列表
-        - 对于 processing 状态：优先从内存读取（实时进度）
-        - 对于 completed/failed/all 状态：合并内存和 MongoDB 数据
-        """
-        try:
-            task_status = None
-            if status:
-                try:
-                    # 前端传递的是 "processing"，但 TaskStatus 使用的是 "running"
-                    # 需要做映射转换
-                    status_mapping = {
-                        "processing": "running",  # 前端使用 processing，内存使用 running
-                        "pending": "pending",
-                        "completed": "completed",
-                        "failed": "failed",
-                        "cancelled": "cancelled"
-                    }
-                    mapped_status = status_mapping.get(status, status)
-                    task_status = TaskStatus(mapped_status)
-                except ValueError:
-                    logger.warning(f"⚠️ [Tasks] 无效的状态值: {status}")
-                    task_status = None
-
-            # 1) 从内存读取任务
-            logger.info(f"📋 [Tasks] 准备从内存读取任务: user_id={user_id}, status={status} (mapped to {task_status}), limit={limit}, offset={offset}")
-            tasks_in_mem = await self.memory_manager.list_user_tasks(
-                user_id=user_id,
-                status=task_status,
-                limit=limit * 2,  # 多读一些，后面合并去重
-                offset=0  # 内存中的任务不多，全部读取
-            )
-            logger.info(f"📋 [Tasks] 内存返回数量: {len(tasks_in_mem)}")
-
-            # 2) 🔧 对于 processing/running 状态，需要合并 MongoDB 数据以获取最新进度
-            # 因为 graph_progress_callback 可能直接更新了 MongoDB，而内存数据可能是旧的
-
-            # 3) 从 MongoDB 读取历史任务（用于合并或兜底）
             logger.info(f"📋 [Tasks] 从 MongoDB 读取历史任务")
-            mongo_tasks: List[Dict[str, Any]] = []
-            count = 0
+            tasks_from_db = []
+            db_count = 0
+            
             try:
                 db = get_mongo_db()
+                collection = db["analysis_tasks"]
 
-                # user_id 可能是字符串或 ObjectId，做兼容
-                uid_candidates: List[Any] = [user_id]
+                # 构建查询条件
+                query = {}
+                
+                # 添加状态过滤 - 使用数据库查询条件
+                if db_status:
+                    query["status"] = db_status
+                    logger.info(f"📋 [Tasks] 添加状态过滤: {db_status}")
 
-                # 特殊处理 admin 用户
-                if str(user_id) == 'admin':
-                    # admin 用户：添加固定的 ObjectId 和字符串形式
-                    try:
-                        from bson import ObjectId
-                        admin_oid_str = '507f1f77bcf86cd799439011'
-                        uid_candidates.append(ObjectId(admin_oid_str))
-                        uid_candidates.append(admin_oid_str)  # 兼容字符串存储
-                        logger.info(f"📋 [Tasks] admin用户查询，候选ID: ['admin', ObjectId('{admin_oid_str}'), '{admin_oid_str}']")
-                    except Exception as e:
-                        logger.warning(f"⚠️ [Tasks] admin用户ObjectId创建失败: {e}")
-                else:
-                    # 普通用户：尝试转换为 ObjectId
-                    try:
-                        from bson import ObjectId
-                        uid_candidates.append(ObjectId(user_id))
-                        logger.debug(f"📋 [Tasks] 用户ID已转换为ObjectId: {user_id}")
-                    except Exception as conv_err:
-                        logger.warning(f"⚠️ [Tasks] 用户ID转换ObjectId失败，按字符串匹配: {conv_err}")
+                # 获取总数
+                db_count = await collection.count_documents(query)
+                logger.info(f"📋 [Tasks] MongoDB 任务总数: {db_count}")
 
-                # 兼容 user_id 与 user 两种字段名
-                base_condition = {"$in": uid_candidates}
-                or_conditions: List[Dict[str, Any]] = [
-                    {"user_id": base_condition},
-                    {"user": base_condition}
-                ]
-                query = {"$or": or_conditions}
-
-                if task_status:
-                    # 使用映射后的状态值（TaskStatus枚举的value）
-                    query["status"] = task_status.value
-                    logger.info(f"📋 [Tasks] 添加状态过滤: {task_status.value}")
-
-                logger.info(f"📋 [Tasks] MongoDB 查询条件: {query}")
-                # 读取更多数据用于合并
-                cursor = db.analysis_tasks.find(query).sort("created_at", -1).limit(limit * 2)
+                # 执行查询
+                cursor = collection.find(query).sort("created_at", -1).limit(limit * 2)
+                
                 async for doc in cursor:
-                    count += 1
-                    # 兼容 user_id 或 user 字段
-                    user_field_val = doc.get("user_id", doc.get("user"))
-                    # 🔧 兼容多种股票代码字段名：symbol, stock_code, stock_symbol
+                    # 处理文档，转换为标准格式（与 list_user_tasks 保持一致）
+                    # 兼容多种字段名
                     stock_code_value = doc.get("symbol") or doc.get("stock_code") or doc.get("stock_symbol")
+                    user_field_val = doc.get("user_id", doc.get("user"))
+                    
                     item = {
                         "task_id": doc.get("task_id"),
-                        "user_id": str(user_field_val) if user_field_val is not None else None,
-                        "symbol": stock_code_value,  # 🔧 添加 symbol 字段（前端优先使用）
-                        "stock_code": stock_code_value,  # 🔧 兼容字段
-                        "stock_symbol": stock_code_value,  # 🔧 兼容字段
+                        "user_id": str(user_field_val) if user_field_val else None,
+                        "symbol": stock_code_value,
+                        "stock_code": stock_code_value,
+                        "stock_symbol": stock_code_value,
                         "stock_name": doc.get("stock_name"),
                         "status": str(doc.get("status", "pending")),
                         "progress": int(doc.get("progress", 0) or 0),
@@ -2330,60 +2216,49 @@ class SimpleAnalysisService:
                         "parameters": doc.get("parameters", {}),
                         "execution_time": doc.get("execution_time"),
                         "tokens_used": doc.get("tokens_used"),
-                        # 为兼容前端，这里沿用 memory_manager 的字段名
                         "result_data": doc.get("result"),
                     }
-                    # 时间格式转为 ISO 字符串（添加时区信息）
+                    
+                    # 时间格式转换
+                    from datetime import timezone, timedelta
+                    china_tz = timezone(timedelta(hours=8))
+                    
                     for k in ("start_time", "end_time"):
                         if item.get(k) and hasattr(item[k], "isoformat"):
                             dt = item[k]
-                            # 如果是 naive datetime（没有时区信息），假定为 UTC+8
                             if dt.tzinfo is None:
-                                from datetime import timezone, timedelta
-                                china_tz = timezone(timedelta(hours=8))
                                 dt = dt.replace(tzinfo=china_tz)
                             item[k] = dt.isoformat()
-                    mongo_tasks.append(item)
+                    
+                    tasks_from_db.append(item)
 
-                logger.info(f"📋 [Tasks] MongoDB 返回数量: {count}")
-            except Exception as mongo_e:
-                logger.error(f"❌ MongoDB 查询任务列表失败: {mongo_e}", exc_info=True)
-                # MongoDB 查询失败，继续使用内存数据
+                logger.info(f"📋 [Tasks] MongoDB 返回数量: {len(tasks_from_db)}")
+                
+                # 调试：打印 MongoDB 中找到的任务
+                if tasks_from_db:
+                    for task in tasks_from_db[:3]:
+                        logger.info(f"  📌 MongoDB任务: {task.get('task_id')} - {task.get('status')} - {task.get('progress')}%")
+                else:
+                    logger.warning(f"⚠️ [Tasks] MongoDB 中没有找到任务")
+                    
+            except Exception as e:
+                logger.error(f"❌ MongoDB 查询失败: {e}", exc_info=True)
 
-            # 4) 合并内存和 MongoDB 数据，去重
-            # 🔧 对于 processing/running 状态，优先使用 MongoDB 中的进度数据
-            # 因为 graph_progress_callback 直接更新 MongoDB，而内存数据可能是旧的
+            # 3) 合并任务（内存优先）
             task_dict = {}
 
-            # 先添加内存中的任务
-            for task in tasks_in_mem:
+            # 先添加 MongoDB 中的任务
+            for task in tasks_from_db:
                 task_id = task.get("task_id")
                 if task_id:
                     task_dict[task_id] = task
 
-            # 再添加 MongoDB 中的任务
-            # 对于 processing/running 状态，使用 MongoDB 中的进度数据（更新）
-            # 对于其他状态，如果内存中已有，则跳过（内存优先）
-            for task in mongo_tasks:
+            # 再添加内存中的任务（覆盖 MongoDB 中的同名任务，因为内存数据更新）
+            for task in tasks_in_mem:
                 task_id = task.get("task_id")
-                if not task_id:
-                    continue
-
-                # 如果内存中已有这个任务
-                if task_id in task_dict:
-                    mem_task = task_dict[task_id]
-                    mongo_task = task
-
-                    # 如果是 processing/running 状态，使用 MongoDB 中的进度数据
-                    if mongo_task.get("status") in ["processing", "running"]:
-                        # 保留内存中的基本信息，但更新进度相关字段
-                        mem_task["progress"] = mongo_task.get("progress", mem_task.get("progress", 0))
-                        mem_task["message"] = mongo_task.get("message", mem_task.get("message", ""))
-                        mem_task["current_step"] = mongo_task.get("current_step", mem_task.get("current_step", ""))
-                        logger.debug(f"🔄 [Tasks] 更新任务进度: {task_id}, progress={mem_task['progress']}%")
-                else:
-                    # 内存中没有，直接添加 MongoDB 中的任务
+                if task_id:
                     task_dict[task_id] = task
+                    logger.debug(f"🔄 [Tasks] 内存任务覆盖: {task_id}")
 
             # 转换为列表并按时间排序
             merged_tasks = list(task_dict.values())
@@ -2392,7 +2267,7 @@ class SimpleAnalysisService:
             # 分页
             results = merged_tasks[offset:offset + limit]
 
-            # 🔥 统一处理时区信息（确保所有时间字段都有时区标识）
+            # 统一处理时区信息（与 list_user_tasks 保持一致）
             from datetime import timezone, timedelta
             china_tz = timezone(timedelta(hours=8))
 
@@ -2414,8 +2289,187 @@ class SimpleAnalysisService:
 
             # 为结果补齐股票名称
             results = self._enrich_stock_names(results)
-            logger.info(f"📋 [Tasks] 合并后返回数量: {len(results)} (内存: {len(tasks_in_mem)}, MongoDB: {count})")
+            
+            logger.info(f"📋 [Tasks] list_all_tasks 最终返回: {len(results)} 个任务 (内存: {len(tasks_in_mem)}, MongoDB: {len(tasks_from_db)}, 合并后: {len(merged_tasks)})")
+            
             return results
+            
+        except Exception as outer_e:
+            logger.error(f"❌ list_all_tasks 外层异常: {outer_e}", exc_info=True)
+            return []
+        
+    async def list_user_tasks(
+        self,
+        user_id: str,
+        status: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """获取用户任务列表
+        - 对于 processing 状态：优先从内存读取（实时进度）
+        - 对于 completed/failed/all 状态：合并内存和 MongoDB 数据
+        """
+        try:
+            # 使用 TaskStatusHelper 获取查询条件
+            mem_status, db_status = TaskStatusHelper.get_conditions(status)
+            logger.info(f"📋 [Tasks] 状态映射: 前端={status}, 内存查询={mem_status}, 数据库查询={db_status}")
+
+            # 1) 从内存读取任务
+            logger.info(f"📋 [Tasks] 准备从内存读取任务: user_id={user_id}, status={status} (内存查询用: {mem_status}), limit={limit}, offset={offset}")
+            tasks_in_mem = await self.memory_manager.list_user_tasks(
+                user_id=user_id,
+                status=mem_status,  # 使用内存查询条件
+                limit=limit * 2,  # 多读一些，后面合并去重
+                offset=0  # 内存中的任务不多，全部读取
+            )
+            logger.info(f"📋 [Tasks] 内存返回数量: {len(tasks_in_mem)}")
+
+            # 2) 从 MongoDB 读取历史任务（用于合并或兜底）
+            logger.info(f"📋 [Tasks] 从 MongoDB 读取历史任务")
+            mongo_tasks: List[Dict[str, Any]] = []
+            mongo_count = 0
+            try:
+                db = get_mongo_db()
+
+                # user_id 可能是字符串或 ObjectId，做兼容
+                from bson import ObjectId
+                uid_candidates: List[Any] = [user_id]
+
+                # 尝试转换为 ObjectId（如果不是admin）
+                try:
+                    if ObjectId.is_valid(user_id):
+                        uid_candidates.append(ObjectId(user_id))
+                        logger.debug(f"📋 [Tasks] 用户ID已转换为ObjectId: {user_id}")
+                except Exception as conv_err:
+                    logger.warning(f"⚠️ [Tasks] 用户ID转换ObjectId失败，按字符串匹配: {conv_err}")
+
+                # 兼容 user_id 与 user 两种字段名
+                base_condition = {"$in": uid_candidates}
+                or_conditions: List[Dict[str, Any]] = [
+                    {"user_id": base_condition},
+                    {"user": base_condition}
+                ]
+                query = {"$or": or_conditions}
+
+                # 添加状态过滤 - 使用数据库查询条件
+                if db_status:
+                    query["status"] = db_status
+                    logger.info(f"📋 [Tasks] 添加状态过滤: {db_status}")
+
+                logger.info(f"📋 [Tasks] MongoDB 查询条件: {query}")
+                
+                # 读取更多数据用于合并
+                cursor = db.analysis_tasks.find(query).sort("created_at", -1).limit(limit * 2)
+                
+                async for doc in cursor:
+                    mongo_count += 1
+                    # 兼容 user_id 或 user 字段
+                    user_field_val = doc.get("user_id", doc.get("user"))
+                    # 兼容多种股票代码字段名：symbol, stock_code, stock_symbol
+                    stock_code_value = doc.get("symbol") or doc.get("stock_code") or doc.get("stock_symbol")
+                    
+                    item = {
+                        "task_id": doc.get("task_id"),
+                        "user_id": str(user_field_val) if user_field_val is not None else None,
+                        "symbol": stock_code_value,
+                        "stock_code": stock_code_value,
+                        "stock_symbol": stock_code_value,
+                        "stock_name": doc.get("stock_name"),
+                        "status": str(doc.get("status", "pending")),
+                        "progress": int(doc.get("progress", 0) or 0),
+                        "message": doc.get("message", ""),
+                        "current_step": doc.get("current_step", ""),
+                        "start_time": doc.get("started_at") or doc.get("created_at"),
+                        "end_time": doc.get("completed_at"),
+                        "parameters": doc.get("parameters", {}),
+                        "execution_time": doc.get("execution_time"),
+                        "tokens_used": doc.get("tokens_used"),
+                        "result_data": doc.get("result"),
+                    }
+                    
+                    # 时间格式转为 ISO 字符串（添加时区信息）
+                    for k in ("start_time", "end_time"):
+                        if item.get(k) and hasattr(item[k], "isoformat"):
+                            dt = item[k]
+                            # 如果是 naive datetime（没有时区信息），假定为 UTC+8
+                            if dt.tzinfo is None:
+                                from datetime import timezone, timedelta
+                                china_tz = timezone(timedelta(hours=8))
+                                dt = dt.replace(tzinfo=china_tz)
+                            item[k] = dt.isoformat()
+                    mongo_tasks.append(item)
+
+                logger.info(f"📋 [Tasks] MongoDB 返回数量: {mongo_count}")
+                
+                # 调试：打印找到的任务
+                if mongo_tasks:
+                    for task in mongo_tasks[:3]:
+                        logger.info(f"  📌 MongoDB任务: {task.get('task_id')} - {task.get('status')} - {task.get('progress')}%")
+                else:
+                    logger.warning(f"⚠️ [Tasks] MongoDB 中没有找到任务")
+                    
+            except Exception as mongo_e:
+                logger.error(f"❌ MongoDB 查询任务列表失败: {mongo_e}", exc_info=True)
+                # MongoDB 查询失败，继续使用内存数据
+
+            # 3) 合并内存和 MongoDB 数据，去重
+            task_dict = {}
+
+            # 先添加内存中的任务
+            for task in tasks_in_mem:
+                task_id = task.get("task_id")
+                if task_id:
+                    task_dict[task_id] = task
+
+            # 再添加 MongoDB 中的任务
+            for task in mongo_tasks:
+                task_id = task.get("task_id")
+                if not task_id:
+                    continue
+
+                # 如果内存中已有这个任务
+                if task_id in task_dict:
+                    mem_task = task_dict[task_id]
+                    
+                    # 如果是 processing/running 状态，使用 MongoDB 中的进度数据更新内存
+                    if task.get("status") in ["processing", "running"]:
+                        mem_task["progress"] = task.get("progress", mem_task.get("progress", 0))
+                        mem_task["message"] = task.get("message", mem_task.get("message", ""))
+                        mem_task["current_step"] = task.get("current_step", mem_task.get("current_step", ""))
+                        logger.debug(f"🔄 [Tasks] 更新任务进度: {task_id}, progress={mem_task['progress']}%")
+                else:
+                    # 内存中没有，直接添加 MongoDB 中的任务
+                    task_dict[task_id] = task
+
+            # 转换为列表并按时间排序
+            merged_tasks = list(task_dict.values())
+            merged_tasks.sort(key=lambda x: x.get('start_time', ''), reverse=True)
+
+            # 分页
+            results = merged_tasks[offset:offset + limit]
+
+            # 统一处理时区信息
+            from datetime import timezone, timedelta
+            china_tz = timezone(timedelta(hours=8))
+
+            for task in results:
+                for time_field in ("start_time", "end_time", "created_at", "started_at", "completed_at"):
+                    value = task.get(time_field)
+                    if value:
+                        if hasattr(value, "isoformat"):
+                            if value.tzinfo is None:
+                                value = value.replace(tzinfo=china_tz)
+                            task[time_field] = value.isoformat()
+                        elif isinstance(value, str) and value and not value.endswith(('Z', '+08:00', '+00:00')):
+                            if 'T' in value or ' ' in value:
+                                task[time_field] = value.replace(' ', 'T') + '+08:00'
+
+            # 为结果补齐股票名称
+            results = self._enrich_stock_names(results)
+            
+            logger.info(f"📋 [Tasks] 合并后返回数量: {len(results)} (内存: {len(tasks_in_mem)}, MongoDB: {mongo_count}, 合并后总数: {len(merged_tasks)})")
+            return results
+            
         except Exception as outer_e:
             logger.error(f"❌ list_user_tasks 外层异常: {outer_e}", exc_info=True)
             return []

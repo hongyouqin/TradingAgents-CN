@@ -4,7 +4,7 @@
 """
 
 from decimal import Decimal
-from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Set
@@ -933,6 +933,7 @@ async def list_all_tasks(
 
 @router.get("/tasks", response_model=Dict[str, Any])
 async def list_user_tasks(
+    request: Request, 
     user: dict = Depends(get_current_user),
     status: Optional[str] = Query(None, description="任务状态过滤"),
     limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
@@ -940,8 +941,6 @@ async def list_user_tasks(
 ):
     """获取用户的任务列表"""
     try:
-        logger.info(f"📋 查询用户任务列表: {user['id']}")
-
         tasks = await get_simple_analysis_service().list_user_tasks(
             user_id=user["id"],
             status=status,

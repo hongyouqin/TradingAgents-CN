@@ -92,7 +92,7 @@ class TaskState:
         return data
 
 # ======================== 枚举/数据类定义 ========================
-class TaskStatus:
+class TaskStatus(str, Enum):
     """任务状态枚举"""
     PENDING = "pending"       # 待执行
     RUNNING = "running"       # 执行中
