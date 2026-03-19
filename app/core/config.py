@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     _sms_access_key_id: Optional[str] = None
     _sms_access_key_secret: Optional[str] = None
     
+    # ========== 短信配置 ==========
     @property
     def SMS_ACCESS_KEY_ID(self) -> Optional[str]:
         """延迟加载 Access Key ID"""
@@ -67,41 +68,46 @@ class Settings(BaseSettings):
         if self._sms_access_key_secret is None:
             self._sms_access_key_secret = os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
         return self._sms_access_key_secret
-
+    
+    # ========== 微信支付配置 ==========
     @property
     def WECHAT_APP_ID(self) -> str:
         """延迟加载微信APP_ID"""
         if self._wechat_app_id is None:
-            # 优先从环境变量获取，如果没有则使用默认值
-            self._wechat_app_id = os.environ.get('WECHAT_APP_ID') or self.WECHAT_APP_ID
+            # 从环境变量获取，使用硬编码默认值
+            self._wechat_app_id = os.environ.get('WECHAT_APP_ID', '')
         return self._wechat_app_id
     
     @property
     def WECHAT_MCH_ID(self) -> str:
         """延迟加载微信商户号"""
         if self._wechat_mch_id is None:
-            self._wechat_mch_id = os.environ.get('WECHAT_MCH_ID') or self.WECHAT_MCH_ID
+            self._wechat_mch_id = os.environ.get('WECHAT_MCH_ID', '')
         return self._wechat_mch_id
     
     @property
     def WECHAT_API_KEY(self) -> str:
         """延迟加载微信API密钥"""
         if self._wechat_api_key is None:
-            self._wechat_api_key = os.environ.get('WECHAT_API_KEY') or self.WECHAT_API_KEY
+            self._wechat_api_key = os.environ.get('WECHAT_API_KEY', '')
         return self._wechat_api_key
     
     @property
     def WECHAT_NOTIFY_URL(self) -> str:
         """延迟加载微信通知URL"""
         if self._wechat_notify_url is None:
-            self._wechat_notify_url = os.environ.get('WECHAT_NOTIFY_URL') or self.WECHAT_NOTIFY_URL
+            self._wechat_notify_url = os.environ.get('WECHAT_NOTIFY_URL', '')
         return self._wechat_notify_url
     
     @property
-    def WECHAT_H5_REDIRECT_URL(self) -> Optional[str]:
+    def WECHAT_H5_REDIRECT_URL(self) -> str:  # 注意：返回str而不是Optional[str]
         """延迟加载微信H5支付重定向URL"""
         if self._wechat_h5_redirect_url is None:
-            self._wechat_h5_redirect_url = os.environ.get('WECHAT_H5_REDIRECT_URL') or self.WECHAT_H5_REDIRECT_URL
+            # 直接从环境变量获取，使用合理的默认值
+            self._wechat_h5_redirect_url = os.environ.get(
+                'WECHAT_H5_REDIRECT_URL',
+                ''
+            )
         return self._wechat_h5_redirect_url
     
     def validate_wechat_config(self) -> tuple[bool, str]:
