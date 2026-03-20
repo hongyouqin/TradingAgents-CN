@@ -441,18 +441,16 @@ async def get_latest_pitch(
     description="查询数据库中所有存在股票推荐（buy_signal=1）的日期"
 )
 async def get_available_dates(
-    collection_name: str = Query(DEFAULT_COLLECTION, description="MongoDB集合名称"),
     limit: int = Query(30, description="返回最近多少天的日期", ge=1, le=365)
 ):
     """
     获取所有有推荐数据的日期列表
     
-    - **collection_name**: MongoDB集合名称
     - **limit**: 返回最近多少天的日期（按日期倒序）
     """
     try:
         db = get_mongo_db()
-        collection = db[collection_name]
+        collection = db[DEFAULT_COLLECTION]
         
         # 使用聚合查询获取所有不同的日期（只统计有buy_signal=1的日期）
         pipeline = [
