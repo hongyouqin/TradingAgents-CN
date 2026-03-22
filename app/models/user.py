@@ -81,6 +81,8 @@ class RegistrationError(str, Enum):
     USERNAME_INVALID = "username_invalid"
     DATABASE_ERROR = "database_error"
     UNKNOWN_ERROR = "unknown_error"
+    INVITE_CODE_INVALID = "invite_code_invalid"
+    INVITE_CODE_REQUIRED = "invite_code_required"
 
 class User(BaseModel):
     """用户模型"""

@@ -17,6 +17,7 @@ from app.models.user import RegistrationError, UserCreate, UserUpdate
 from app.services.operation_log_service import log_operation, log_login_failure
 from app.models.operation_log import ActionType
 import re
+from typing import Dict, Any
 
 # 尝试导入日志管理器
 try:
@@ -100,6 +101,8 @@ class PhoneRegisterRequest(BaseModel):
         example="user@example.com"
     )
     
+    invite_code: Optional[str] = Field(None, description="邀请码")
+    
     @validator('phone')
     def validate_phone_format(cls, v):
         """验证手机号格式"""
@@ -156,7 +159,8 @@ class PhoneRegisterRequest(BaseModel):
                 "sms_code": "123456",
                 "password": "StrongPass123!",
                 "username": "trading_user",
-                "email": "user@example.com"
+                "email": "user@example.com",
+                "invite_code": "`INVITE123`"
             }
         }
         
@@ -326,8 +330,6 @@ async def send_sms(request: SMSRequest):
     
     return {"message": message, 'success': success}
 
-from fastapi import HTTPException
-from typing import Dict, Any
 
 @router.post("/register-by-phone", 
             response_model=Dict[str, Any],
@@ -384,7 +386,8 @@ async def register_by_phone(request: PhoneRegisterRequest):
         sms_code=request.sms_code,
         password=request.password,
         username=request.username,
-        email=request.email
+        email=request.email,
+        invite_code= request.invite_code
     )
     
     if user:
