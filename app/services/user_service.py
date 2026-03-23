@@ -12,6 +12,7 @@ from bson import ObjectId
 
 from app.core.config import settings
 from app.models.user import RegistrationError, User, UserCreate, UserUpdate, UserResponse
+from app.services.anti_fraud_service import AntiFraudService
 from app.services.invite_code import InviteCodeManager
 from app.services.sms_code_service import SMSCodeService
 
@@ -34,7 +35,8 @@ class UserService:
         self.db = self.client[settings.MONGO_DB]
         self.users_collection = self.db.users
         self.sms_service = SMSCodeService()
-        self.invite_manager = InviteCodeManager(self.db)
+        self.invite_manager = InviteCodeManager(self.db) 
+        self.anti_fraud = AntiFraudService(self.db)
 
     def close(self):
         """关闭数据库连接"""
@@ -75,34 +77,7 @@ class UserService:
             logger.error(f"❌ 检查邀请码要求失败: {e}")
             return False
         
-    async def create_invite_code(self, 
-                                 user_id: str, 
-                                 max_uses: int = 1,
-                                 expire_days: int = 7,
-                                 custom_code: Optional[str] = None,
-                                 description: Optional[str] = None) -> dict:
-        """创建邀请码"""
-        # 检查用户是否有权限创建邀请码（例如：VIP用户、管理员等）
-        user = await self.get_user_by_id(user_id)
-        if not user:
-            raise ValueError("用户不存在")
-
-        invite_code = await self.invite_manager.create_invite_code(
-            created_by=user_id,
-            max_uses=max_uses,
-            expire_days=expire_days,
-            custom_code=custom_code,
-            description=description
-        )
-        
-        return {
-            "code": invite_code.code,
-            "max_uses": invite_code.max_uses,
-            "expire_at": invite_code.expire_at,
-            "created_at": invite_code.created_at,
-            "description": invite_code.description
-        }
-    
+ 
     async def create_user(self, user_data: UserCreate) -> Optional[User]:
         """创建用户"""
         try:
@@ -169,9 +144,12 @@ class UserService:
     async def create_user_by_phone(self, phone: str, sms_code: str, 
                                 password: str, username: str = None,
                                 email: str = None,
-                                invite_code: str = None) -> Tuple[Optional[User], Optional[str], Optional[str]]:
+                                invite_code: str = None,
+                                register_ip: str = None,
+                                user_agent: str = None,
+                                device_id: str = None) -> Tuple[Optional[User], Optional[str], Optional[str]]:
         """
-        通过手机号+验证码+密码方式注册用户（支持邀请码）
+        通过手机号+验证码+密码方式注册用户（支持邀请码和防刷）
         
         Args:
             phone: 手机号
@@ -179,7 +157,10 @@ class UserService:
             password: 密码
             username: 可选用户名
             email: 可选邮箱
-            invite_code: 邀请码（可选）
+            invite_code: 邀请码
+            register_ip: 注册IP（可选）
+            user_agent: User-Agent（可选）
+            device_id: 设备ID（可选）
             
         Returns:
             Tuple[user, error_type, error_message]
@@ -188,9 +169,11 @@ class UserService:
             - error_message: 错误描述（中文）
         """
         try:
-            logger.info(f"📱 开始手机号注册流程: {phone} 邀请码：{invite_code}")
+            logger.info(f"📱 开始手机号注册流程: {phone}, 邀请码: {invite_code}")
+            if register_ip:
+                logger.info(f"   客户端信息: IP={register_ip}, Device={device_id[:8] if device_id else 'N/A'}...")
             
-            
+            # ========== 0. 检查是否需要邀请码 ==========
             require_invite = await self._check_require_invite_code()
         
             if require_invite and not invite_code:
@@ -199,16 +182,18 @@ class UserService:
                 return None, RegistrationError.INVITE_CODE_REQUIRED, error_msg
             
             # ========== 1. 验证邀请码（如果提供了） ==========
+            inviter_id = None
             if invite_code:
                 logger.info(f"🔍 验证邀请码: {invite_code}")
                 
-                is_valid, error_msg, invite_doc = await self.invite_manager.validate_invite_code(invite_code)
+                is_valid, error_msg, invite_doc = self.invite_manager.validate_invite_code_sync(invite_code)
                 
                 if not is_valid:
                     logger.warning(f"❌ 邀请码验证失败: {invite_code}, 原因: {error_msg}")
                     return None, RegistrationError.INVITE_CODE_INVALID, error_msg
                 
-                logger.info(f"✅ 邀请码验证成功: {invite_code}")
+                inviter_id = invite_doc.get("created_by")
+                logger.info(f"✅ 邀请码验证成功: {invite_code}, 邀请人: {inviter_id}")
             
             # ========== 2. 验证短信验证码 ==========
             logger.info(f"🔍 验证短信验证码: {sms_code}")
@@ -275,23 +260,48 @@ class UserService:
             
             # ========== 7. 创建用户文档 ==========
             logger.info(f"📝 创建用户文档: {phone}")
+            
             user_doc = {
                 "username": username,
                 "email": email or "",
                 "phone": phone,
                 "hashed_password": self.hash_password(password),
                 "is_active": True,
-                "is_verified": True,  # 手机号注册默认证通过
+                "is_verified": True,
                 "is_admin": False,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
                 "last_login": None,
-                "phone_verified": True,  # 标记手机号已验证
-                "email_verified": False,  # 邮箱未验证
-                "invited_code": invite_code if invite_code else None,  # 记录使用的邀请码
-                "invited_by": None,  # 记录邀请人ID，稍后填充
-                "invite_code_used_success": False,  # 邀请码是否使用成功
-                "register_type": "phone",  # 标记为手机号注册
+                "phone_verified": True,
+                "email_verified": False,
+                
+                # 邀请相关字段
+                "invited_code": invite_code if invite_code else None,
+                "invited_by": None,  # 稍后填充
+                "invited_at": datetime.utcnow() if invite_code else None,
+                "invite_code_used_success": False,
+                "new_user_reward_granted": False,  # 新用户注册奖励是否已发放
+                
+                # 邀请奖励统计（作为邀请人）
+                "invite_rewards": {
+                    "total_invited": 0,
+                    "total_reward_power": 0,
+                    "total_extra_reward": 0,
+                    "invited_users": [],
+                    "pending_extra_rewards": 0
+                },
+                
+                # 防刷相关
+                "register_ip": register_ip,
+                "register_user_agent": user_agent,
+                "register_device_id": device_id,
+                "daily_invite_count": 0,
+                "last_invite_date": None,
+                
+                # 注册类型
+                "register_type": "phone",
+                
+                # 用户偏好
                 "preferences": {
                     "default_market": "A股",
                     "default_depth": "3",
@@ -306,8 +316,10 @@ class UserService:
                     "desktop_notifications": True,
                     "analysis_complete_notification": True,
                     "system_maintenance_notification": True,
-                    "sms_notifications": True  # 开启短信通知
+                    "sms_notifications": True
                 },
+                
+                # 配额和统计
                 "daily_quota": 1000,
                 "concurrent_limit": 3,
                 "total_analyses": 0,
@@ -326,12 +338,30 @@ class UserService:
                 logger.info(f"   注册方式: 手机号验证")
                 logger.info(f"   用户ID: {user_id_str}")
                 
-                # ========== 9. 使用邀请码（如果提供了） ==========
-                if invite_code:
-                    logger.info(f"🔧 使用邀请码: {invite_code}")
+                # 创建 User 对象
+                user_obj = User(**user_doc)
+                
+                # ========== 9. 发放新用户注册奖励 ==========
+                from app.services.invite_reward_service import InviteRewardService
+                reward_service = InviteRewardService(self.db)
+                
+                reward_success, reward_msg = await reward_service.grant_new_user_reward(user_obj)
+                if reward_success:
+                    logger.info(f"🎁 新用户注册奖励发放成功: {reward_msg}")
+                    # 更新用户标记
+                    self.users_collection.update_one(
+                        {"_id": result.inserted_id},
+                        {"$set": {"new_user_reward_granted": True}}
+                    )
+                else:
+                    logger.warning(f"⚠️ 新用户注册奖励发放失败: {reward_msg}")
+                
+                # ========== 10. 使用邀请码并发放邀请奖励 ==========
+                if invite_code and inviter_id:
+                    logger.info(f"🔧 处理邀请奖励: 邀请码={invite_code}, 邀请人={inviter_id}")
                     
                     # 使用邀请码
-                    success, error_msg = await self.invite_manager.use_invite_code(
+                    success, error_msg = self.invite_manager.use_invite_code_sync(
                         invite_code, 
                         user_id_str
                     )
@@ -339,7 +369,6 @@ class UserService:
                     if not success:
                         # 邀请码使用失败，记录日志但不影响注册
                         logger.warning(f"⚠️ 邀请码使用失败: {invite_code}, 用户: {user_id_str}, 原因: {error_msg}")
-                        # 更新用户文档，标记邀请码使用失败
                         self.users_collection.update_one(
                             {"_id": result.inserted_id},
                             {
@@ -350,38 +379,54 @@ class UserService:
                             }
                         )
                     else:
-                        logger.info(f"✅ 邀请码使用成功: {invite_code}, 用户: {user_id_str}")
+                        logger.info(f"✅ 邀请码使用成功: {invite_code}")
                         
-                        # 获取邀请码详细信息，记录邀请人ID
-                        is_valid, _, invite_doc = await self.invite_manager.validate_invite_code(invite_code)
-                        if is_valid and invite_doc:
-                            created_by = invite_doc.get("created_by")
-                            if created_by:
-                                # 更新用户文档，记录邀请人信息
-                                self.users_collection.update_one(
-                                    {"_id": result.inserted_id},
-                                    {
-                                        "$set": {
-                                            "invite_code_used_success": True,
-                                            "invited_by": created_by,
-                                            "invited_code": invite_code
-                                        }
-                                    }
-                                )
-                                logger.info(f"   邀请人ID: {created_by}")
+                        # 更新新用户的邀请信息
+                        self.users_collection.update_one(
+                            {"_id": result.inserted_id},
+                            {
+                                "$set": {
+                                    "invite_code_used_success": True,
+                                    "invited_by": inviter_id,
+                                    "invited_code": invite_code
+                                }
+                            }
+                        )
+                        
+                        # 发放邀请奖励给邀请人
+                        reward_success, reward_msg = await reward_service.grant_invite_reward(
+                            inviter_id=inviter_id,
+                            new_user_id=user_id_str,
+                            new_user_phone=phone,
+                            invite_code=invite_code
+                        )
+                        
+                        if reward_success:
+                            logger.info(f"✅ 邀请奖励发放成功: {reward_msg}")
+                        else:
+                            logger.warning(f"⚠️ 邀请奖励发放失败: {reward_msg}")
                 
-                return User(**user_doc), None, None
+                # 重新获取用户对象（包含最新信息）
+                updated_user = await self.get_user_by_id(user_id_str)
                 
+                # 获取算力余额
+                from app.services.power_account_service import power_account_service
+                balance_info = await power_account_service.get_balance(updated_user)
+                
+                logger.info(f"🎉 用户注册完成: {username}, 算力余额: {balance_info.get('balance', 0)}⚡")
+                
+                return updated_user, None, None
+                    
             except Exception as db_error:
                 error_msg = "数据库操作失败"
-                logger.error(f"❌ {error_msg}: {db_error}")
+                logger.error(f"❌ {error_msg}: {db_error}", exc_info=True)
                 return None, RegistrationError.DATABASE_ERROR, f"{error_msg}: {str(db_error)}"
             
         except Exception as e:
             error_msg = "注册过程中发生未知错误"
             logger.error(f"❌ {error_msg}: {e}", exc_info=True)
             return None, RegistrationError.UNKNOWN_ERROR, f"{error_msg}: {str(e)}"
-        
+    
     async def update_last_login(self, username: str) -> bool:
         """更新最后登录时间"""
         try:

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, validator
 
+from app.services.anti_fraud_service import AntiFraudService
 from app.services.auth_service import AuthService
 from app.services.user_service import user_service
 from app.models.user import RegistrationError, UserCreate, UserUpdate
@@ -18,6 +19,9 @@ from app.services.operation_log_service import log_operation, log_login_failure
 from app.models.operation_log import ActionType
 import re
 from typing import Dict, Any
+
+from utils.utils import get_real_client_ip
+
 
 # 尝试导入日志管理器
 try:
@@ -245,7 +249,35 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str
     is_admin: bool = False
+
+async def get_client_ip(request: Request) -> str:
+    """获取真实客户端 IP（依赖注入）"""
+    # 从 X-Forwarded-For 获取
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
     
+    # 从 X-Real-IP 获取
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+    
+    # 回退
+    return request.client.host if request.client else "unknown"
+
+async def get_client_info(
+    request: Request,
+    client_ip: str = Depends(get_client_ip)
+) -> dict:
+    """获取完整的客户端信息"""
+    return {
+        "ip": client_ip,
+        "user_agent": request.headers.get("user-agent", ""),
+        "x_forwarded_for": request.headers.get("X-Forwarded-For"),
+        "x_real_ip": request.headers.get("X-Real-IP"),
+        "device_id": AntiFraudService.get_device_id(client_ip, request.headers.get("user-agent", ""))
+    }
+
 async def get_current_user(
         credentials: HTTPAuthorizationCredentials = Depends(security)
     ) -> dict:
@@ -366,9 +398,24 @@ async def send_sms(request: SMSRequest):
                             }
                         }
                     }
+                },
+                429: {
+                    "description": "请求过于频繁",
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "success": False,
+                                "error_code": "too_many_requests",
+                                "message": "该IP在24小时内最多注册3个账号"
+                            }
+                        }
+                    }
                 }
             })
-async def register_by_phone(request: PhoneRegisterRequest):
+async def register_by_phone(
+    request: PhoneRegisterRequest,
+    http_request: Request
+):
     """
     手机号注册
     
@@ -378,106 +425,199 @@ async def register_by_phone(request: PhoneRegisterRequest):
     - 手机号必须是11位有效号码
     - 密码至少8个字符，包含字母和数字
     - 短信验证码有效期为5分钟
+    - 支持邀请码注册，邀请人可获得算力奖励
     """
-    
-    # 调用服务层方法
-    user, error_type, error_message = await user_service.create_user_by_phone(
-        phone=request.phone,
-        sms_code=request.sms_code,
-        password=request.password,
-        username=request.username,
-        email=request.email,
-        invite_code= request.invite_code
-    )
-    
-    if user:
-        # 注册成功
-        return {
-            "success": True,
-            "message": "注册成功",
-            "data": {
-                "user": {
-                    "id": str(user.id),
-                    "username": user.username,
-                    "phone": user.phone,
-                    "email": user.email,
-                    "is_verified": user.is_verified,
-                    "register_type": getattr(user, 'register_type', 'phone'),
-                    "created_at": user.created_at.isoformat() if hasattr(user.created_at, 'isoformat') else str(user.created_at)
-                },
-                "token_info": {
-                    "note": "请调用登录接口获取访问令牌"
-                }
-            }
-        }
-    else:
-        # 注册失败，根据错误类型返回相应的HTTP状态码和错误信息
-        error_detail_map = {
-            RegistrationError.SMS_CODE_INVALID: {
-                "status_code": 400,
-                "detail": "短信验证码无效或已过期，请重新获取",
-                "suggestion": "请检查验证码是否正确，或重新发送验证码"
-            },
-            RegistrationError.PHONE_ALREADY_REGISTERED: {
-                "status_code": 409,  # Conflict
-                "detail": "该手机号已注册",
-                "suggestion": "请直接登录或使用其他手机号"
-            },
-            RegistrationError.USERNAME_ALREADY_EXISTS: {
-                "status_code": 409,  # Conflict
-                "detail": "用户名已被使用",
-                "suggestion": "请选择其他用户名"
-            },
-            RegistrationError.EMAIL_ALREADY_EXISTS: {
-                "status_code": 409,  # Conflict
-                "detail": "邮箱已被使用",
-                "suggestion": "请使用其他邮箱或直接登录"
-            },
-            RegistrationError.PASSWORD_TOO_WEAK: {
-                "status_code": 400,
-                "detail": "密码强度不足",
-                "suggestion": "密码至少8位，包含字母和数字"
-            },
-            RegistrationError.USERNAME_INVALID: {
-                "status_code": 400,
-                "detail": "用户名格式不正确",
-                "suggestion": "用户名3-20位，支持中文、英文、数字、下划线，不能以数字开头"
-            },
-            RegistrationError.DATABASE_ERROR: {
-                "status_code": 500,
-                "detail": "系统内部错误",
-                "suggestion": "请稍后重试"
-            }
-        }
+    try:
+        # ========== 1. 获取客户端信息 ==========
+        # 获取真实 IP
+        real_ip = get_real_client_ip(http_request)
         
-        # 获取错误详情
-        error_detail = error_detail_map.get(
-            error_type, 
-            {
-                "status_code": 500,
-                "detail": "注册失败",
-                "suggestion": "请稍后重试"
-            }
+        # 获取 User-Agent
+        user_agent = http_request.headers.get("user-agent", "")
+        
+        # 初始化防刷服务
+        anti_fraud = user_service.anti_fraud
+        
+        # 生成设备指纹
+        device_id = anti_fraud.get_device_id(real_ip, user_agent)
+        
+        # 记录客户端信息
+        logger.info(f"📱 注册请求 - IP: {real_ip}, Device: {device_id[:8]}..., UA: {user_agent[:50]}")
+        
+        # ========== 2. 防刷检查 ==========
+        # IP 限制检查
+        is_valid, error_msg = anti_fraud.check_ip_limit(real_ip, limit=5, hours=24)
+        if not is_valid:
+            logger.warning(f"❌ IP注册超限: {real_ip}")
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "success": False,
+                    "error_code": "ip_limit_exceeded",
+                    "message": error_msg,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        # 设备限制检查
+        is_valid, error_msg = anti_fraud.check_device_limit(device_id, limit=3, hours=24)
+        if not is_valid:
+            logger.warning(f"❌ 设备注册超限: {device_id}")
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "success": False,
+                    "error_code": "device_limit_exceeded",
+                    "message": error_msg,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+        
+        # 可疑活动检测
+        is_suspicious = anti_fraud.is_suspicious_activity(user_agent)
+        if is_suspicious:
+            logger.warning(f"⚠️ 可疑注册活动: IP={real_ip}, UA={user_agent}")
+            # 这里选择放行但记录日志
+        
+        # ========== 3. 调用服务层注册 ==========
+        user, error_type, error_message = await user_service.create_user_by_phone(
+            phone=request.phone,
+            sms_code=request.sms_code,
+            password=request.password,
+            username=request.username,
+            email=request.email,
+            invite_code=request.invite_code,
+            register_ip=real_ip,
+            user_agent=user_agent,
+            device_id=device_id
         )
         
-        # 构建详细的错误响应
-        error_response = {
-            "success": False,
-            "error_code": error_type.value if hasattr(error_type, 'value') else str(error_type),
-            "message": error_message or error_detail["detail"],
-            "detail": error_detail["detail"],
-            "suggestion": error_detail["suggestion"],
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # 记录错误日志
-        logger.error(f"❌ 手机号注册失败: phone={request.phone}, "
-                    f"error_type={error_type}, message={error_message}")
-        
-        # 抛出HTTP异常
+        # ========== 4. 处理注册结果 ==========
+        if user:
+            # 注册成功
+            logger.info(f"✅ 用户注册成功: {user.phone}, ID: {user.id}")
+            
+            # 构建响应数据
+            user_data = {
+                "id": str(user.id),
+                "username": user.username,
+                "phone": user.phone,
+                "email": user.email,
+                "is_verified": user.is_verified,
+                "register_type": getattr(user, 'register_type', 'phone'),
+                "created_at": user.created_at.isoformat() if hasattr(user.created_at, 'isoformat') else str(user.created_at),
+                "power_balance": getattr(user, 'power_balance', 0)
+            }
+            
+            # 如果使用了邀请码，添加奖励信息
+            if request.invite_code:
+                user_data["invite_info"] = {
+                    "used_invite_code": request.invite_code,
+                    "inviter_reward": 10  # 基础奖励
+                }
+            
+            return {
+                "success": True,
+                "message": "注册成功",
+                "data": {
+                    "user": user_data,
+                    "token_info": {
+                        "note": "请调用登录接口获取访问令牌"
+                    }
+                }
+            }
+        else:
+            # 注册失败，根据错误类型返回相应的HTTP状态码和错误信息
+            error_detail_map = {
+                RegistrationError.SMS_CODE_INVALID: {
+                    "status_code": 400,
+                    "detail": "短信验证码无效或已过期，请重新获取",
+                    "suggestion": "请检查验证码是否正确，或重新发送验证码"
+                },
+                RegistrationError.PHONE_ALREADY_REGISTERED: {
+                    "status_code": 409,
+                    "detail": "该手机号已注册",
+                    "suggestion": "请直接登录或使用其他手机号"
+                },
+                RegistrationError.USERNAME_ALREADY_EXISTS: {
+                    "status_code": 409,
+                    "detail": "用户名已被使用",
+                    "suggestion": "请选择其他用户名"
+                },
+                RegistrationError.EMAIL_ALREADY_EXISTS: {
+                    "status_code": 409,
+                    "detail": "邮箱已被使用",
+                    "suggestion": "请使用其他邮箱或直接登录"
+                },
+                RegistrationError.PASSWORD_TOO_WEAK: {
+                    "status_code": 400,
+                    "detail": "密码强度不足",
+                    "suggestion": "密码至少8位，包含字母和数字"
+                },
+                RegistrationError.USERNAME_INVALID: {
+                    "status_code": 400,
+                    "detail": "用户名格式不正确",
+                    "suggestion": "用户名3-20位，支持中文、英文、数字、下划线，不能以数字开头"
+                },
+                RegistrationError.INVITE_CODE_INVALID: {
+                    "status_code": 400,
+                    "detail": "邀请码无效",
+                    "suggestion": "请检查邀请码是否正确"
+                },
+                RegistrationError.INVITE_CODE_REQUIRED: {
+                    "status_code": 400,
+                    "detail": "注册需要邀请码",
+                    "suggestion": "请联系管理员获取邀请码"
+                },
+                RegistrationError.DATABASE_ERROR: {
+                    "status_code": 500,
+                    "detail": "系统内部错误",
+                    "suggestion": "请稍后重试"
+                }
+            }
+            
+            # 获取错误详情
+            error_detail = error_detail_map.get(
+                error_type, 
+                {
+                    "status_code": 500,
+                    "detail": "注册失败",
+                    "suggestion": "请稍后重试"
+                }
+            )
+            
+            # 构建详细的错误响应
+            error_response = {
+                "success": False,
+                "error_code": error_type.value if hasattr(error_type, 'value') else str(error_type),
+                "message": error_message or error_detail["detail"],
+                "detail": error_detail["detail"],
+                "suggestion": error_detail["suggestion"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # 记录错误日志
+            logger.error(f"❌ 手机号注册失败: phone={request.phone}, "
+                        f"error_type={error_type}, message={error_message}")
+            
+            # 抛出HTTP异常
+            raise HTTPException(
+                status_code=error_detail["status_code"],
+                detail=error_response
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 注册过程发生未知错误: {e}", exc_info=True)
         raise HTTPException(
-            status_code=error_detail["status_code"],
-            detail=error_response
+            status_code=500,
+            detail={
+                "success": False,
+                "error_code": "internal_error",
+                "message": "注册失败，请稍后重试",
+                "timestamp": datetime.utcnow().isoformat()
+            }
         )
 
 @router.post("/reset-password-by-phone")

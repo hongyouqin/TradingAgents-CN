@@ -200,6 +200,72 @@ class InviteCodeManager:
         
         return True, "", invite_code
     
+    def validate_invite_code_sync(self, code: str) -> Tuple[bool, str, Optional[dict]]:
+        """
+        验证邀请码是否有效,同步版本，适合monogodb驱动同步的情况
+        返回: (是否有效, 错误信息, 邀请码信息)
+        """
+        invite_code = self.collection.find_one({"code": code})
+        
+        if not invite_code:
+            return False, "邀请码不存在", None
+        
+        # 1. 检查是否手动失效（用户主动操作）
+        if not invite_code.get("is_active", True):
+            return False, "邀请码已被手动失效", None
+        
+        # 2. 检查是否自动过期
+        expire_at = invite_code.get("expire_at")
+        current_timestamp = self._get_current_timestamp()
+        
+        if expire_at and expire_at < current_timestamp:
+            return False, "邀请码已过期", None
+        
+        # 3. 检查是否已用完
+        used_count = invite_code.get("used_count", 0)
+        max_uses = invite_code.get("max_uses", 1)
+        
+        if used_count >= max_uses:
+            return False, "邀请码已达到使用上限", None
+        
+        return True, "", invite_code
+    
+    def use_invite_code_sync(self, code: str, user_id: str) -> Tuple[bool, str]:
+        """
+        使用邀请码
+        返回: (是否成功, 错误信息)
+        """
+        try:
+            # 验证邀请码
+            is_valid, error_msg, invite_code = self.validate_invite_code_sync(code)
+            if not is_valid:
+                return False, error_msg
+            
+            # 检查用户是否已使用过该邀请码
+            if user_id in invite_code.get("used_by", []):
+                return False, "您已使用过该邀请码"
+            
+            # 更新邀请码使用记录
+            result = self.collection.update_one(
+                {
+                    "code": code,
+                    "used_count": {"$lt": invite_code["max_uses"]}
+                },
+                {
+                    "$inc": {"used_count": 1},
+                    "$push": {"used_by": user_id},
+                    "$set": {"updated_at": self._get_current_timestamp()}
+                }
+            )
+            
+            if result.modified_count == 0:
+                return False, "邀请码使用失败，请稍后重试"
+            
+            return True, ""
+            
+        except Exception as e:
+            return False, f"使用邀请码失败: {str(e)}"
+    
     async def use_invite_code(self, code: str, user_id: str) -> Tuple[bool, str]:
         """
         使用邀请码

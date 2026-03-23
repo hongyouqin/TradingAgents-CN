@@ -373,8 +373,8 @@ class ReportSimplifier:
                     model=llm_config["model_name"],
                     backend_url=llm_config["backend_url"],
                     temperature=0.4,
-                    max_tokens=4000,
-                    timeout=80,
+                    max_tokens=8000,
+                    timeout=120,
                     api_key=llm_config["api_key"]
                 )
                 
