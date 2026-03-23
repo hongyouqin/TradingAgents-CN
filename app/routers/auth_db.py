@@ -20,7 +20,8 @@ from app.models.operation_log import ActionType
 import re
 from typing import Dict, Any
 
-from utils.utils import get_real_client_ip
+from app.utils.utils import get_real_client_ip
+
 
 
 # 尝试导入日志管理器
@@ -249,34 +250,6 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str
     is_admin: bool = False
-
-async def get_client_ip(request: Request) -> str:
-    """获取真实客户端 IP（依赖注入）"""
-    # 从 X-Forwarded-For 获取
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    
-    # 从 X-Real-IP 获取
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-    
-    # 回退
-    return request.client.host if request.client else "unknown"
-
-async def get_client_info(
-    request: Request,
-    client_ip: str = Depends(get_client_ip)
-) -> dict:
-    """获取完整的客户端信息"""
-    return {
-        "ip": client_ip,
-        "user_agent": request.headers.get("user-agent", ""),
-        "x_forwarded_for": request.headers.get("X-Forwarded-For"),
-        "x_real_ip": request.headers.get("X-Real-IP"),
-        "device_id": AntiFraudService.get_device_id(client_ip, request.headers.get("user-agent", ""))
-    }
 
 async def get_current_user(
         credentials: HTTPAuthorizationCredentials = Depends(security)
