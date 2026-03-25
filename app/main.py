@@ -26,6 +26,7 @@ from app.routers import multi_market_stocks as multi_market_stocks_router
 from app.routers import notifications as notifications_router
 from app.routers import websocket_notifications as websocket_notifications_router
 from app.routers import scheduler as scheduler_router
+from app.services.compensation_service import compensation_service
 from app.services.basics_sync_service import get_basics_sync_service
 from app.services.memory_state_manager import get_memory_state_manager
 from app.services.multi_source_basics_sync_service import MultiSourceBasicsSyncService
@@ -622,6 +623,11 @@ async def lifespan(app: FastAPI):
             logger.info(f"📰 新闻数据同步已配置（仅自选股）: {settings.NEWS_SYNC_CRON}")
 
         scheduler.start()
+
+        # 启动补偿算力账户消费冻结服务
+        compensation_service.set_logger(logger = logger)
+        compensation_service.start_compensation_loop()        
+        
         
         # 设置调度器实例到服务中，以便API可以管理任务
         set_scheduler_instance(scheduler)
@@ -648,6 +654,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"UserService cleanup error: {e}")
 
+        # 停止补偿任务循环
+        await compensation_service.stop_compensation_loop()
         await close_db()
         logger.info("TradingAgents FastAPI backend stopped")
 

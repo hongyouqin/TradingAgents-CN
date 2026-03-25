@@ -169,23 +169,15 @@ async def submit_single_analysis(
     background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user)
 ):
-    """提交单股分析任务 - 使用consume函数"""
-    PRICE = Decimal('1.8')
-    
+    """提交单股分析任务 - 预扣款模式"""
+        
     try:
-        # 1. 先检查余额是否足够
-        
+        # 1. 准备用户对象
         temp_dict = user.copy()
-        temp_dict['hashed_password'] = 'dummy'  # 临时密码
+        temp_dict['hashed_password'] = 'dummy'
         user_obj = User.model_validate(temp_dict)
-        balance_info = await power_account_service.get_balance(user_obj.copy())
-        if balance_info['balance'] < PRICE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"算力不足，需要{PRICE}⚡，当前余额{balance_info['balance']}⚡"
-            )
         
-        # 2. 创建任务记录（不扣费）
+        # 2. 创建任务记录
         analysis_service = get_simple_analysis_service()
         task_result = await analysis_service.create_analysis_task(
             user_id=user["id"],
@@ -195,7 +187,36 @@ async def submit_single_analysis(
         task_id = task_result["task_id"]
         consume_no = f"ANA{task_id}"  # 直接用task_id作为订单号
         
-        # 3. 后台任务 - 执行完再扣费
+        # 3. 预扣款（冻结金额）
+        # freeze 内部会检查可用余额（balance - frozen_amount）是否足够
+        if not request.price:
+            PRICE = Decimal('1.8')
+            logger.info(f"⚠️ 请求中未指定价格，使用默认价格 {PRICE}⚡")
+        else:
+            PRICE = Decimal(str(request.price))
+            logger.info(f"✅ 请求中指定价格: {PRICE}⚡")
+            
+        success, msg = await power_account_service.freeze(
+            user=user_obj,
+            order_no=consume_no,
+            amount=PRICE,
+            description=f"股票分析预扣款-{request.stock_code}",
+            metadata={
+                'task_id': task_id,
+                'stock_code': request.stock_code,
+                'analysis_type': 'single'
+            }
+        )
+        
+        if not success:
+            # 预扣款失败（通常是余额不足），清理已创建的任务记录
+            await analysis_service.delete_analysis_task(task_id)
+            raise HTTPException(
+                status_code=400,
+                detail=f"算力不足，需要{PRICE}⚡，{msg}"
+            )
+        
+        # 4. 后台任务 - 执行分析并确认/取消扣款
         async def run_analysis_task():
             try:
                 # 执行分析
@@ -210,44 +231,49 @@ async def submit_single_analysis(
                 global_memory_manager = get_memory_state_manager()
                 task_status = await global_memory_manager.get_task_dict(task_id)
                 
-                # 只有成功才扣费
+                # 根据分析结果处理扣款
                 if task_status and task_status.get('status', '').upper() == 'COMPLETED':
-                    # 调用现有的consume函数扣费
-                    success, msg = await power_account_service.consume(
-                        user=user_obj,
-                        order_no=consume_no,
-                        amount=PRICE,
-                        description=f"股票分析-{request.stock_code}",
-                        metadata={
-                            'task_id': task_id,
-                            'stock_code': request.stock_code,
-                            'analysis_type': 'single'
-                        }
+                    # 分析成功：确认扣款（将冻结转为实际扣款）
+                    success, msg = await power_account_service.confirm_consume(
+                        order_no=consume_no
                     )
                     
                     if success:
-                        logger.info(f"✅ 分析成功并扣费: {task_id}")
+                        logger.info(f"✅ 分析成功并确认扣款: {task_id}")
+                        # 更新任务支付状态
+                        await service.update_task_payment_status(task_id, 'PAID')
                     else:
-                        # 扣费失败
-                        logger.error(f"❌ 分析成功但扣费失败: {task_id}, {msg}")
+                        # 确认扣款失败（异常情况）
+                        logger.error(f"❌ 分析成功但确认扣款失败: {task_id}, {msg}")
+                        await service.update_task_payment_status(task_id, 'PAYMENT_FAILED')
                 else:
-                    # 分析失败，不扣费
-                    logger.info(f"⚠️ 分析失败，不扣费: {task_id}")
+                    # 分析失败：取消扣款（解冻金额）
+                    await power_account_service.cancel_consume(
+                        order_no=consume_no,
+                        reason="分析失败"
+                    )
+                    logger.info(f"⚠️ 分析失败，取消扣款: {task_id}")
+                    await service.update_task_payment_status(task_id, 'FAILED_NO_CHARGE')
                     
             except Exception as e:
                 logger.error(f"❌ 后台任务异常: {task_id}, {e}")
-                # 异常情况也不扣费
+                # 异常情况：取消扣款
+                await power_account_service.cancel_consume(
+                    order_no=consume_no,
+                    reason=f"系统异常: {str(e)}"
+                )
                 await service.update_task_payment_status(task_id, 'FAILED_NO_CHARGE')
         
         background_tasks.add_task(run_analysis_task)
         
+        # 5. 返回响应
         return {
             "success": True,
             "data": {
                 "task_id": task_id,
                 "status": "PROCESSING",
                 "price": float(PRICE),
-                "message": "分析任务已启动，完成后扣费",
+                "message": "分析任务已启动，已预扣算力，完成后确认扣款",
                 "check_url": f"/api/tasks/{task_id}/status"
             }
         }
@@ -256,6 +282,13 @@ async def submit_single_analysis(
         raise
     except Exception as e:
         logger.error(f"❌ 提交失败: {e}")
+        # 如果有创建任务但未预扣款成功，确保清理
+        if 'task_id' in locals():
+            try:
+                analysis_service = get_simple_analysis_service()
+                await analysis_service.delete_analysis_task(task_id)
+            except:
+                pass
         raise HTTPException(status_code=500, detail="系统错误")
 
 
@@ -963,7 +996,7 @@ async def list_user_tasks(
         logger.error(f"❌ 获取任务列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/batch", response_model=Dict[str, Any])
+# @router.post("/batch", response_model=Dict[str, Any])
 async def submit_batch_analysis(
     request: BatchAnalysisRequest,
     user: dict = Depends(get_current_user)

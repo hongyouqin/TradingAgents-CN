@@ -479,3 +479,9 @@ class ConfigTestResponse(BaseModel):
     message: str
     details: Optional[Dict[str, Any]] = None
     response_time: Optional[float] = None
+
+
+# 算力配置
+class PowerConfig:
+    FREEZE_TIMEOUT_MINUTES = 30  # 冻结超时时间（分钟）
+    COMPENSATION_INTERVAL_MINUTES = 5  # 补偿任务执行间隔（分钟）

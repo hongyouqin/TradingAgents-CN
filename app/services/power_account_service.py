@@ -101,6 +101,14 @@ class PowerAccountService:
         self.transactions_collection.create_index("order_no", unique=True)  # 幂等性关键
         self.transactions_collection.create_index([("created_at", -1)])
         self.transactions_collection.create_index("status")  # 添加状态索引
+        
+        self.transactions_collection.create_index(
+            [("order_no", 1), ("status", 1)],
+            unique=False
+        )
+        self.transactions_collection.create_index(
+            [("account_id", 1), ("status", 1), ("created_at", -1)]
+        )
     
     def _decimal_to_128(self, value: Decimal) -> Decimal128:
         """Decimal转MongoDB Decimal128"""
@@ -679,6 +687,348 @@ class PowerAccountService:
             logger.error(f"❌ 获取待处理交易失败: {e}")
             return []
         
+    
+    def _freeze_sync(self, user: User, order_no: str, amount: Decimal,
+                 description: str = '', metadata: Dict = None) -> Tuple[bool, str]:
+        """
+        同步：冻结金额（预扣款）
+        核心：增加frozen_amount字段，减少available balance
+        """
+        try:
+            if amount <= Decimal('0'):
+                return False, "冻结金额必须大于0"
+            
+            account = self._get_or_create_account_sync(user)
+            if not account:
+                return False, "账户不存在"
+            
+            # 幂等性校验
+            existing_transaction = self.transactions_collection.find_one({"order_no": order_no})
+            if existing_transaction:
+                if existing_transaction.get('status') == 'FROZEN':
+                    logger.info(f"✅ 订单{order_no}已冻结，跳过重复处理")
+                    return True, "已冻结"
+                elif existing_transaction.get('status') == 'CONFIRMED':
+                    return True, "已确认扣款"
+            
+            current_balance = account['balance']
+            current_frozen = account['frozen_amount']
+            
+            # 检查可用余额（balance - frozen）是否足够
+            available_balance = current_balance - current_frozen
+            if available_balance < amount:
+                return False, f"可用余额不足，当前可用: {available_balance}⚡，需要: {amount}⚡"
+            
+            amount_128 = self._decimal_to_128(amount)
+            
+            # 更新余额和冻结金额
+            result = self.accounts_collection.find_one_and_update(
+                {
+                    "user_id": str(user.id),
+                    "balance": {"$gte": self._decimal_to_128(current_frozen + amount)},
+                    "version": account['version']
+                },
+                {
+                    "$inc": {
+                        "frozen_amount": amount_128,
+                        "version": 1
+                    },
+                    "$set": {
+                        "updated_at": datetime.utcnow()
+                    }
+                },
+                return_document=True
+            )
+            
+            if not result:
+                return False, "冻结失败，余额可能不足"
+            
+            # 创建冻结交易记录
+            clean_metadata = self._clean_decimal_in_dict(metadata or {})
+            transaction = {
+                "_id": ObjectId(),
+                "account_id": str(account['_id']),
+                "user_id": str(user.id),
+                "username": user.username,
+                "order_no": order_no,
+                "transaction_type": "FREEZE",
+                "amount": amount_128,
+                "before_balance": self._decimal_to_128(current_balance),
+                "after_balance": None,
+                "status": "FROZEN",
+                "description": description,
+                "metadata": clean_metadata,
+                "created_at": datetime.utcnow(),
+                "completed_at": None
+            }
+            
+            try:
+                self.transactions_collection.insert_one(transaction)
+            except errors.DuplicateKeyError:
+                # 订单已存在，可能是并发创建
+                existing = self.transactions_collection.find_one({"order_no": order_no})
+                if existing and existing.get('status') == 'FROZEN':
+                    return True, "已冻结"
+                return False, "订单冲突"
+            
+            logger.info(f"✅ 金额冻结成功: {user.username}, 冻结: {amount}⚡")
+            return True, "冻结成功"
+            
+        except Exception as e:
+            logger.error(f"❌ 冻结失败: {e}", exc_info=True)
+            return False, f"冻结失败: {str(e)}"
+
+    def _confirm_consume_sync(self, order_no: str) -> Tuple[bool, str]:
+        """
+        同步：确认消费（将冻结转为实际扣款）
+        """
+        try:
+            # 查找冻结记录
+            frozen_tx = self.transactions_collection.find_one({
+                "order_no": order_no,
+                "status": "FROZEN",
+                "transaction_type": "FREEZE"
+            })
+            
+            if not frozen_tx:
+                return False, "未找到冻结记录"
+            
+            # 更新账户：减少balance，减少frozen_amount
+            account = self.accounts_collection.find_one({
+                "_id": ObjectId(frozen_tx['account_id'])
+            })
+            
+            if not account:
+                return False, "账户不存在"
+            
+            frozen_amount = self._decimal_from_128(frozen_tx['amount'])
+            amount_128 = self._decimal_to_128(frozen_amount)
+            
+            result = self.accounts_collection.find_one_and_update(
+                {
+                    "_id": account['_id'],
+                    "frozen_amount": {"$gte": amount_128},
+                    "balance": {"$gte": amount_128}
+                },
+                {
+                    "$inc": {
+                        "balance": self._decimal_to_128(-frozen_amount),
+                        "frozen_amount": self._decimal_to_128(-frozen_amount),
+                        "total_consumed": amount_128,
+                        "version": 1
+                    },
+                    "$set": {
+                        "updated_at": datetime.utcnow()
+                    }
+                },
+                return_document=True
+            )
+            
+            if not result:
+                return False, "确认扣款失败"
+            
+            # 更新交易记录
+            self.transactions_collection.update_one(
+                {"_id": frozen_tx['_id']},
+                {
+                    "$set": {
+                        "status": "CONFIRMED",
+                        "completed_at": datetime.utcnow(),
+                        "after_balance": self._decimal_to_128(
+                            self._decimal_from_128(result['balance'])
+                        )
+                    }
+                }
+            )
+            
+            logger.info(f"✅ 确认扣款成功: {order_no}, 金额: {frozen_amount}⚡")
+            return True, "扣款成功"
+            
+        except Exception as e:
+            logger.error(f"❌ 确认扣款失败: {e}", exc_info=True)
+            return False, f"确认失败: {str(e)}"
+
+    def _cancel_consume_sync(self, order_no: str, reason: str = '') -> Tuple[bool, str]:
+        """
+        同步：取消消费（解冻金额）
+        """
+        try:
+            # 查找冻结记录
+            frozen_tx = self.transactions_collection.find_one({
+                "order_no": order_no,
+                "status": "FROZEN",
+                "transaction_type": "FREEZE"
+            })
+            
+            if not frozen_tx:
+                return False, "未找到冻结记录"
+            
+            # 更新账户：减少frozen_amount
+            account = self.accounts_collection.find_one({
+                "_id": ObjectId(frozen_tx['account_id'])
+            })
+            
+            if not account:
+                return False, "账户不存在"
+            
+            frozen_amount = self._decimal_from_128(frozen_tx['amount'])
+            amount_128 = self._decimal_to_128(frozen_amount)
+            
+            result = self.accounts_collection.find_one_and_update(
+                {
+                    "_id": account['_id'],
+                    "frozen_amount": {"$gte": amount_128}
+                },
+                {
+                    "$inc": {
+                        "frozen_amount": self._decimal_to_128(-frozen_amount),
+                        "version": 1
+                    },
+                    "$set": {
+                        "updated_at": datetime.utcnow()
+                    }
+                },
+                return_document=True
+            )
+            
+            if not result:
+                return False, "解冻失败"
+            
+            # 更新交易记录
+            self.transactions_collection.update_one(
+                {"_id": frozen_tx['_id']},
+                {
+                    "$set": {
+                        "status": "CANCELLED",
+                        "completed_at": datetime.utcnow(),
+                        "metadata": {
+                            **(frozen_tx.get('metadata') or {}),
+                            "cancel_reason": reason
+                        }
+                    }
+                }
+            )
+            
+            logger.info(f"✅ 取消扣款成功: {order_no}, 解冻: {frozen_amount}⚡")
+            return True, "解冻成功"
+            
+        except Exception as e:
+            logger.error(f"❌ 取消扣款失败: {e}", exc_info=True)
+            return False, f"取消失败: {str(e)}"
+
+    # 对外暴露的异步方法
+    async def freeze(self, user: User, order_no: str, amount: Decimal,
+                    description: str = '', metadata: Dict = None) -> Tuple[bool, str]:
+        return await asyncio.to_thread(
+            self._freeze_sync, user, order_no, amount, description, metadata
+        )
+
+    async def confirm_consume(self, order_no: str) -> Tuple[bool, str]:
+        return await asyncio.to_thread(self._confirm_consume_sync, order_no)
+
+    async def cancel_consume(self, order_no: str, reason: str = '') -> Tuple[bool, str]:
+        return await asyncio.to_thread(self._cancel_consume_sync, order_no, reason)
+    
+    def _get_expired_frozen_transactions_sync(self, timeout_minutes: int = 30) -> list:
+        """
+        同步：获取过期的冻结交易记录
+        """
+        try:
+            cutoff_time = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+            
+            # 查找状态为 FROZEN 且创建时间超过阈值的记录
+            expired_transactions = list(self.transactions_collection.find({
+                "status": "FROZEN",
+                "transaction_type": "FREEZE",
+                "created_at": {"$lt": cutoff_time}
+            }).limit(100))  # 每次最多处理100条
+            
+            logger.info(f"🔍 找到 {len(expired_transactions)} 条过期冻结记录")
+            return expired_transactions
+            
+        except Exception as e:
+            logger.error(f"❌ 获取过期冻结记录失败: {e}", exc_info=True)
+            return []
+    
+    def _compensate_expired_freeze_sync(self, transaction: Dict) -> Tuple[bool, str]:
+        """
+        同步：补偿处理单个过期的冻结记录
+        """
+        try:
+            order_no = transaction['order_no']
+            account_id = transaction['account_id']
+            frozen_amount = self._decimal_from_128(transaction['amount'])
+            amount_128 = self._decimal_to_128(frozen_amount)
+            
+            # 检查是否已经被处理过（防止重复补偿）
+            current_tx = self.transactions_collection.find_one({
+                "_id": transaction['_id']
+            })
+            
+            if current_tx['status'] != 'FROZEN':
+                logger.info(f"⏭️ 订单 {order_no} 状态已变更，跳过补偿")
+                return True, "已处理"
+            
+            # 更新账户：解冻金额
+            result = self.accounts_collection.find_one_and_update(
+                {
+                    "_id": ObjectId(account_id),
+                    "frozen_amount": {"$gte": amount_128}
+                },
+                {
+                    "$inc": {
+                        "frozen_amount": self._decimal_to_128(-frozen_amount),
+                        "version": 1
+                    },
+                    "$set": {
+                        "updated_at": datetime.utcnow()
+                    }
+                },
+                return_document=True
+            )
+            
+            if not result:
+                logger.error(f"❌ 补偿解冻失败: {order_no}")
+                return False, "解冻失败"
+            
+            # 更新交易记录状态
+            self.transactions_collection.update_one(
+                {"_id": transaction['_id']},
+                {
+                    "$set": {
+                        "status": "EXPIRED",
+                        "completed_at": datetime.utcnow(),
+                        "metadata": {
+                            **(transaction.get('metadata') or {}),
+                            "compensated": True,
+                            "compensated_at": datetime.utcnow().isoformat(),
+                            "compensate_reason": "超时未确认"
+                        }
+                    }
+                }
+            )
+            
+            logger.info(f"✅ 补偿解冻成功: {order_no}, 金额: {frozen_amount}⚡")
+            return True, "补偿成功"
+            
+        except Exception as e:
+            logger.error(f"❌ 补偿处理失败: {transaction.get('order_no')}, {e}", exc_info=True)
+            return False, str(e)
+    
+    async def get_expired_frozen_transactions(self, timeout_minutes: int = 30) -> list:
+        """获取过期的冻结交易记录"""
+        return await asyncio.to_thread(
+            self._get_expired_frozen_transactions_sync, 
+            timeout_minutes
+        )
+    
+    async def compensate_expired_freeze(self, transaction: Dict) -> Tuple[bool, str]:
+        """补偿处理单个过期的冻结记录"""
+        return await asyncio.to_thread(
+            self._compensate_expired_freeze_sync,
+            transaction
+        )
+    
 
 # 全局算力账户服务实例
 power_account_service = PowerAccountService()
