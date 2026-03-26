@@ -221,7 +221,7 @@ class PowerAccountService:
         # 🔥 幂等性校验：先检查该订单是否已处理
         existing_transaction = self.transactions_collection.find_one({"order_no": order_no})
         if existing_transaction:
-            if existing_transaction.get('status') == 'SUCCESS':
+            if existing_transaction.get('status') == 'CONFIRMED':
                 logger.info(f"✅ 订单{order_no}已成功充值，跳过重复处理")
                 return True, "订单已处理"
             elif existing_transaction.get('status') == 'PENDING':
@@ -308,7 +308,7 @@ class PowerAccountService:
                         {"_id": transaction['_id']},
                         {
                             "$set": {
-                                "status": "SUCCESS",
+                                "status": "CONFIRMED",
                                 "completed_at": datetime.utcnow(),
                                 "after_balance": self._decimal_to_128(after_balance)
                             }
@@ -371,7 +371,7 @@ class PowerAccountService:
                     {"_id": pending_tx['_id']},
                     {
                         "$set": {
-                            "status": "SUCCESS",
+                            "status": "CONFIRMED",
                             "completed_at": datetime.utcnow(),
                             "after_balance": self._decimal_to_128(current_balance)
                         }
@@ -406,7 +406,7 @@ class PowerAccountService:
             # 幂等性校验
             existing_transaction = self.transactions_collection.find_one({"order_no": order_no})
             if existing_transaction:
-                if existing_transaction.get('status') == 'SUCCESS':
+                if existing_transaction.get('status') == 'CONFIRMED':
                     logger.info(f"✅ 订单{order_no}已成功消费，跳过重复处理")
                     return True, "订单已处理"
                 elif existing_transaction.get('status') == 'PENDING':
@@ -495,7 +495,7 @@ class PowerAccountService:
                 {"_id": transaction['_id']},
                 {
                     "$set": {
-                        "status": "SUCCESS",
+                        "status": "CONFIRMED",
                         "completed_at": datetime.utcnow(),
                         "after_balance": self._decimal_to_128(after_balance)
                     }
@@ -535,7 +535,7 @@ class PowerAccountService:
                     {"_id": pending_tx['_id']},
                     {
                         "$set": {
-                            "status": "SUCCESS",
+                            "status": "CONFIRMED",
                             "completed_at": datetime.utcnow(),
                             "after_balance": self._decimal_to_128(current_balance)
                         }
@@ -572,16 +572,16 @@ class PowerAccountService:
         }
     
     def _get_transactions_sync(self, user: User, limit: int = 50, 
-                            status: str = None,
-                            transaction_type: str = None) -> list:
+                                status: str = None,
+                                transaction_type: str = None) -> list:
         """
         同步：获取用户交易流水
         
         Args:
             user: 用户对象
             limit: 返回数量限制
-            status: 筛选状态 (SUCCESS/PENDING/FAILED)
-            transaction_type: 筛选类型 (RECHARGE/CONSUME)
+            status: 筛选状态 (FROZEN/CONFIRMED/CANCELLED/EXPIRED)
+            transaction_type: 筛选类型 (RECHARGE/CONSUME/FREEZE/REFUND)
         """
         try:
             query = {"user_id": str(user.id)}
@@ -590,7 +590,7 @@ class PowerAccountService:
             if status:
                 query["status"] = status
             
-            # 🔥 添加交易类型筛选
+            # 🔥 添加交易类型筛选 - 支持 FREEZE
             if transaction_type and transaction_type != 'ALL':
                 query["transaction_type"] = transaction_type
             
@@ -655,22 +655,23 @@ class PowerAccountService:
     async def get_balance(self, user: User) -> Dict[str, Decimal]:
         return await asyncio.to_thread(self._get_balance_sync, user)
     
-    async def get_transactions(self, user: User, limit: int = 50,
-                            transaction_type: str = None) -> list:
+
+    async def get_transactions(self, user: User, limit: int = 50, 
+                            transaction_type: str = None,
+                            status: str = None) -> list:
         """
-        异步：获取用户交易流水
+        获取用户交易流水
         
         Args:
             user: 用户对象
             limit: 返回数量限制
-            transaction_type: 筛选类型 (RECHARGE/CONSUME)
+            transaction_type: 交易类型 (RECHARGE/CONSUME/FREEZE)
+            status: 交易状态 (FROZEN/CONFIRMED/CANCELLED/EXPIRED)
         """
-        return await asyncio.to_thread(
-            self._get_transactions_sync, 
-            user, 
-            limit,
-            status=None,
-            transaction_type=transaction_type
+        return await asyncio.get_event_loop().run_in_executor(
+            None,
+            self._get_transactions_sync,
+            user, limit, status, transaction_type
         )
     
     async def get_pending_transactions(self, minutes: int = 5) -> list:
@@ -832,6 +833,7 @@ class PowerAccountService:
                 {"_id": frozen_tx['_id']},
                 {
                     "$set": {
+                        "transaction_type": "CONSUME",
                         "status": "CONFIRMED",
                         "completed_at": datetime.utcnow(),
                         "after_balance": self._decimal_to_128(
@@ -863,7 +865,11 @@ class PowerAccountService:
             if not frozen_tx:
                 return False, "未找到冻结记录"
             
-            # 更新账户：减少frozen_amount
+            # 幂等性检查
+            if frozen_tx.get('status') == 'CANCELLED':
+                return True, "已取消"
+            
+            # 获取账户
             account = self.accounts_collection.find_one({
                 "_id": ObjectId(frozen_tx['account_id'])
             })
@@ -874,6 +880,7 @@ class PowerAccountService:
             frozen_amount = self._decimal_from_128(frozen_tx['amount'])
             amount_128 = self._decimal_to_128(frozen_amount)
             
+            # 解冻：只减少 frozen_amount（balance 不变）
             result = self.accounts_collection.find_one_and_update(
                 {
                     "_id": account['_id'],
@@ -894,13 +901,19 @@ class PowerAccountService:
             if not result:
                 return False, "解冻失败"
             
-            # 更新交易记录
+            # 计算解冻后的可用余额
+            current_balance = self._decimal_from_128(result['balance'])
+            current_frozen = self._decimal_from_128(result['frozen_amount'])
+            after_balance = current_balance - current_frozen
+            
+            # 更新交易记录：改为取消状态，保持 FREEZE 类型
             self.transactions_collection.update_one(
                 {"_id": frozen_tx['_id']},
                 {
                     "$set": {
-                        "status": "CANCELLED",
+                        "status": "CANCELLED",  # ✅ 状态改为取消
                         "completed_at": datetime.utcnow(),
+                        "after_balance": self._decimal_to_128(after_balance),
                         "metadata": {
                             **(frozen_tx.get('metadata') or {}),
                             "cancel_reason": reason
@@ -909,11 +922,11 @@ class PowerAccountService:
                 }
             )
             
-            logger.info(f"✅ 取消扣款成功: {order_no}, 解冻: {frozen_amount}⚡")
+            logger.info(f"✅ 取消冻结成功: {order_no}, 解冻: {frozen_amount}⚡")
             return True, "解冻成功"
             
         except Exception as e:
-            logger.error(f"❌ 取消扣款失败: {e}", exc_info=True)
+            logger.error(f"❌ 取消冻结失败: {e}", exc_info=True)
             return False, f"取消失败: {str(e)}"
 
     # 对外暴露的异步方法
@@ -991,6 +1004,11 @@ class PowerAccountService:
                 logger.error(f"❌ 补偿解冻失败: {order_no}")
                 return False, "解冻失败"
             
+            # ✅ 计算解冻后的可用余额
+            current_balance = self._decimal_from_128(result['balance'])
+            current_frozen = self._decimal_from_128(result['frozen_amount'])
+            after_balance = current_balance - current_frozen
+            
             # 更新交易记录状态
             self.transactions_collection.update_one(
                 {"_id": transaction['_id']},
@@ -998,6 +1016,7 @@ class PowerAccountService:
                     "$set": {
                         "status": "EXPIRED",
                         "completed_at": datetime.utcnow(),
+                        "after_balance": self._decimal_to_128(after_balance),  # ✅ 设置 after_balance
                         "metadata": {
                             **(transaction.get('metadata') or {}),
                             "compensated": True,
@@ -1008,7 +1027,7 @@ class PowerAccountService:
                 }
             )
             
-            logger.info(f"✅ 补偿解冻成功: {order_no}, 金额: {frozen_amount}⚡")
+            logger.info(f"✅ 补偿解冻成功: {order_no}, 金额: {frozen_amount}⚡, 解冻后可用余额: {after_balance}")
             return True, "补偿成功"
             
         except Exception as e:

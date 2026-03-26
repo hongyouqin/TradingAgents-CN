@@ -273,25 +273,72 @@ async def get_balance(current_user: User = Depends(get_current_user)):
 @router.get("/transactions")
 async def get_transactions(
     limit: int = Query(50, ge=1, le=200),
-    transaction_type: Optional[str] = Query(None, regex="^(RECHARGE|CONSUME|ALL)?$"),
+    transaction_type: Optional[str] = Query(None, regex="^(RECHARGE|CONSUME|FREEZE|ALL)?$"),
+    status: Optional[str] = Query(None, regex="^(FROZEN|CONFIRMED|CANCELLED|EXPIRED|ALL)?$"),
     current_user: User = Depends(get_current_user)
 ):
     """
-    获取交易流水（充值和消费）
-    - transaction_type: RECHARGE(仅充值), CONSUME(仅消费), ALL(全部)
+    获取用户交易流水
+    
+    - **transaction_type**: 交易类型筛选
+        - `RECHARGE`: 仅充值记录
+        - `CONSUME`: 仅消费记录（已确认扣款）
+        - `FREEZE`: 仅冻结记录（预扣款/待确认）
+        - `ALL`: 所有类型（默认）
+    
+    - **status**: 交易状态筛选
+        - `FROZEN`: 已冻结（待确认）
+        - `CONFIRMED`: 已完成（已确认扣款/充值成功）
+        - `CANCELLED`: 已取消（冻结已取消）
+        - `EXPIRED`: 已过期（超时未确认）
+        - `ALL`: 所有状态（默认）
+    
+    - **limit**: 返回记录数量限制，默认50条，最大200条
+    
+    返回字段说明：
+    - `type`: 交易类型 (RECHARGE/CONSUME/FREEZE)
+    - `type_name`: 交易类型中文名
+    - `status`: 交易状态
+    - `status_name`: 交易状态中文名
+    - `amount`: 交易金额
+    - `before_balance`: 交易前余额
+    - `after_balance`: 交易后余额
+    - `description`: 交易描述
+    - `created_at`: 创建时间
+    - `completed_at`: 完成时间（如有）
+    - `metadata`: 元数据
     """
     temp_dict = current_user.copy()
     temp_dict['hashed_password'] = 'dummy'
     user_obj = User.model_validate(temp_dict)
     
-    # 如果 transaction_type 是 ALL，传 None 给服务层（返回全部）
-    filter_type = None if transaction_type == 'ALL' else transaction_type
+    # 处理交易类型筛选
+    filter_type = None if transaction_type == 'ALL' or not transaction_type else transaction_type
+    
+    # 处理状态筛选
+    filter_status = None if status == 'ALL' or not status else status
     
     transactions = await power_account_service.get_transactions(
         user_obj, 
         limit,
-        transaction_type=filter_type
+        transaction_type=filter_type,
+        status=filter_status
     )
+    
+    # 状态中文映射
+    status_name_map = {
+        'FROZEN': '已冻结',
+        'CONFIRMED': '已完成',
+        'CANCELLED': '已取消',
+        'EXPIRED': '已过期'
+    }
+    
+    # 类型中文映射
+    type_name_map = {
+        'RECHARGE': '充值',
+        'CONSUME': '消费',
+        'FREEZE': '预扣款'
+    }
     
     # 格式化返回
     result = []
@@ -299,12 +346,15 @@ async def get_transactions(
         result.append({
             "order_no": t['order_no'],
             "type": t['transaction_type'],
-            "type_name": "充值" if t['transaction_type'] == 'RECHARGE' else "消费",
+            "type_name": type_name_map.get(t['transaction_type'], t['transaction_type']),
+            "status": t.get('status', ''),
+            "status_name": status_name_map.get(t.get('status', ''), t.get('status', '')),
             "amount": float(t['amount']),
             "before_balance": float(t['before_balance']),
-            "after_balance": float(t['after_balance']),
+            "after_balance": float(t['after_balance']) if t.get('after_balance') else None,
             "description": t.get('description', ''),
             "created_at": t['created_at'].isoformat() + 'Z' if hasattr(t['created_at'], 'isoformat') else t['created_at'],
+            "completed_at": t['completed_at'].isoformat() + 'Z' if t.get('completed_at') and hasattr(t['completed_at'], 'isoformat') else t.get('completed_at'),
             "metadata": t.get('metadata', {})
         })
     
