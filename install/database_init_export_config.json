@@ -12241,6 +12241,47 @@
             }
           },
           {
+            "provider": "chatbyte",
+            "model_name": "deepseek-v3-2-251201",
+            "model_display_name": "",
+            "api_key": "",
+            "api_base": "",
+            "max_tokens": 6000,
+            "temperature": 0.7,
+            "timeout": 60,
+            "retry_times": 3,
+            "enabled": true,
+            "description": "",
+            "model_category": "",
+            "custom_endpoint": null,
+            "enable_memory": false,
+            "enable_debug": false,
+            "priority": 0,
+            "input_price_per_1k": 1e-06,
+            "output_price_per_1k": 1e-06,
+            "currency": "CNY",
+            "capability_level": 4,
+            "suitable_roles": [
+              "both"
+            ],
+            "features": [
+              "reasoning",
+              "long_context",
+              "tool_calling"
+            ],
+            "recommended_depths": [
+              "快速",
+              "基础",
+              "标准",
+              "深度"
+            ],
+            "performance_metrics": {
+              "speed": 3,
+              "cost": 3,
+              "quality": 3
+            }
+          },
+          {
             "provider": "deepseek",
             "model_name": "deepseek-chat",
             "model_display_name": "",
@@ -13029,6 +13070,29 @@
           "source": "environment",
           "migrated_at": "2025-08-18T12:31:27.797000"
         }
+      },
+      {
+        "_id": "68a2eaa5f7c267f552a20dd9",
+        "name": "chatbyte",
+        "display_name": "ChatByte",
+        "description": "字节跳动提供的deepseek模型",
+        "website": "https://www.volcengine.com/",
+        "api_doc_url": "https://www.volcengine.com/docs",
+        "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "is_active": true,
+        "supported_features": [
+          "chat",
+          "completion",
+          "function_calling",
+          "streaming"
+        ],
+        "created_at": "2026-03-26T20:56:05.454000",
+        "updated_at": "2026-03-26T21:31:27.797000",
+        "api_key": "",
+        "extra_config": {
+          "source": "environment",
+          "migrated_at": "2026-03-26T12:31:27.797000"
+        }
       }
     ],
     "market_categories": [
@@ -13174,7 +13238,7 @@
         "provider": "deepseek",
         "api_key": "",
         "config_data": {
-          "model": "deepseek-v3.2",
+          "model": "deepseek-chat",
           "temperature": 0.7,
           "max_tokens": 2000
         },
