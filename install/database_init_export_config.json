@@ -13076,7 +13076,7 @@
         "_id": "68a2eaa5f7c267f552a20dd9",
         "name": "chatbyte",
         "display_name": "ChatByte",
-        "description": "字节跳动提供的deepseek模型",
+        "description": "字节跳提供的deepseek模型",
         "website": "https://www.volcengine.com/",
         "api_doc_url": "https://www.volcengine.com/docs",
         "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
