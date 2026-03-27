@@ -142,70 +142,6 @@
             }
           },
           {
-            "provider": "qianfan",
-            "model_name": "ernie-3.5-8k",
-            "model_display_name": null,
-            "api_key": "",
-            "api_base": "",
-            "max_tokens": 4000,
-            "temperature": 0.7,
-            "timeout": 60,
-            "retry_times": 3,
-            "enabled": true,
-            "description": "",
-            "model_category": "",
-            "custom_endpoint": null,
-            "enable_memory": false,
-            "enable_debug": false,
-            "priority": 0,
-            "input_price_per_1k": null,
-            "output_price_per_1k": null,
-            "currency": "CNY",
-            "capability_level": 2,
-            "suitable_roles": [
-              "both"
-            ],
-            "features": [],
-            "recommended_depths": [
-              "快速",
-              "基础",
-              "标准"
-            ],
-            "performance_metrics": null
-          },
-          {
-            "provider": "qianfan",
-            "model_name": "ernie-4.0-turbo-8k",
-            "model_display_name": null,
-            "api_key": "",
-            "api_base": "",
-            "max_tokens": 4000,
-            "temperature": 0.7,
-            "timeout": 60,
-            "retry_times": 3,
-            "enabled": true,
-            "description": "",
-            "model_category": "",
-            "custom_endpoint": null,
-            "enable_memory": false,
-            "enable_debug": false,
-            "priority": 0,
-            "input_price_per_1k": null,
-            "output_price_per_1k": null,
-            "currency": "CNY",
-            "capability_level": 2,
-            "suitable_roles": [
-              "both"
-            ],
-            "features": [],
-            "recommended_depths": [
-              "快速",
-              "基础",
-              "标准"
-            ],
-            "performance_metrics": null
-          },
-          {
             "provider": "dashscope",
             "model_name": "qwen3-max",
             "model_display_name": "",
@@ -12282,6 +12218,47 @@
             }
           },
           {
+            "provider": "deepseek-reasoner",
+            "model_name": "deepseek-reasoner",
+            "model_display_name": "",
+            "api_key": "",
+            "api_base": "",
+            "max_tokens": 6000,
+            "temperature": 0.7,
+            "timeout": 60,
+            "retry_times": 3,
+            "enabled": true,
+            "description": "",
+            "model_category": "",
+            "custom_endpoint": null,
+            "enable_memory": false,
+            "enable_debug": false,
+            "priority": 0,
+            "input_price_per_1k": 1e-06,
+            "output_price_per_1k": 1e-06,
+            "currency": "CNY",
+            "capability_level": 4,
+            "suitable_roles": [
+              "both"
+            ],
+            "features": [
+              "reasoning",
+              "long_context",
+              "tool_calling"
+            ],
+            "recommended_depths": [
+              "快速",
+              "基础",
+              "标准",
+              "深度"
+            ],
+            "performance_metrics": {
+              "speed": 3,
+              "cost": 3,
+              "quality": 3
+            }
+          },
+          {
             "provider": "deepseek",
             "model_name": "deepseek-chat",
             "model_display_name": "",
@@ -13071,6 +13048,30 @@
           "migrated_at": "2025-08-18T12:31:27.797000"
         }
       },
+      {
+        "_id": "68a2eaa5f7c267f552a20dcc",
+        "name": "deepseek-reasoner",
+        "display_name": "DeepSeekReasoner",
+        "description": "deepseek深度思考模型",
+        "website": "https://www.deepseek.com",
+        "api_doc_url": "https://platform.deepseek.com/api-docs",
+        "default_base_url": "https://api.deepseek.com",
+        "is_active": true,
+        "supported_features": [
+          "chat",
+          "completion",
+          "function_calling",
+          "streaming"
+        ],
+        "created_at": "2026-03-26T20:56:05.454000",
+        "updated_at": "2026-03-26T21:31:27.797000",
+        "api_key": "",
+        "extra_config": {
+          "source": "environment",
+          "migrated_at": "2026-03-26T12:31:27.797000"
+        }
+      }
+    ],
       {
         "_id": "68a2eaa5f7c267f552a20dd9",
         "name": "chatbyte",
