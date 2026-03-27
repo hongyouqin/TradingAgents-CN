@@ -118,6 +118,8 @@ def get_provider_and_url_by_model_sync(model_name: str) -> dict:
 
         client = MongoClient(settings.MONGO_URI)
         db = client[settings.MONGO_DB]
+        
+        logger.info(f"🔍 get_provider_and_url_by_model_sync 查询数据库获取模型 {model_name} 的供应商和 API URL...")
 
         # 查询最新的活跃配置
         configs_collection = db.system_configs
@@ -289,6 +291,8 @@ def _get_env_api_key_for_provider(provider: str) -> str:
         "dashscope": "DASHSCOPE_API_KEY",
         "openai": "OPENAI_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY",
+        "deepseek-reasoner": "DEEPSEEK_API_KEY",
+        "chatbyte": "BYTE_DEEPSEEK_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",
         "siliconflow": "SILICONFLOW_API_KEY",

@@ -347,6 +347,7 @@ class ReportSimplifier:
         
         return mapped
     
+    
     async def _call_llm_for_simplification(
         self, 
         original_content: Dict[str, Any],
@@ -362,7 +363,7 @@ class ReportSimplifier:
             try:
                 llm_config = self._get_llm_config()
                 
-                logger.info(f"🔧 [简化报告] 尝试 {attempt + 1}/{max_retries}")
+                logger.info(f"🔧 _call_llm_for_simplification [简化报告] 尝试 {attempt + 1}/{max_retries}")
                 logger.info(f"  模型: {llm_config['model_name']}")
                 logger.info(f"  供应商: {llm_config['provider']}")
                 
@@ -374,7 +375,7 @@ class ReportSimplifier:
                     backend_url=llm_config["backend_url"],
                     temperature=0.4,
                     max_tokens=8000,
-                    timeout=120,
+                    timeout=180,
                     api_key=llm_config["api_key"]
                 )
                 
@@ -452,20 +453,16 @@ class ReportSimplifier:
             original_content=json.dumps(content, ensure_ascii=False, indent=2)
         )
     
+    
     def _get_llm_config(self) -> Dict[str, Any]:
         """获取LLM配置"""
-        is_enabled = os.getenv("DEEPSEEK_ENABLED")
-        if is_enabled and is_enabled.lower() in ["true", "1", "yes"]:
+        model_name = unified_config.get_quick_analysis_model()
+        if model_name.lower() == "deepseek-chat" or model_name.lower() == "deepseek-reasoner":
             base_url = os.getenv("DEEPSEEK_BASE_URL")
             api_key = os.getenv("DEEPSEEK_API_KEY")
-            model_name = unified_config.get_quick_analysis_model()
-            from app.services.simple_analysis_service import get_provider_and_url_by_model_sync
-            provider_info = get_provider_and_url_by_model_sync(model_name)    
- 
-            logger.info(f"  模型: {model_name}")
-            logger.info(f"  提供商: {provider_info['provider']}")
-            logger.info(f"  后端URL: {base_url}")
-            
+            logger.info(f"  deepseek报告模型: {model_name}")
+            logger.info(f"  deepseek基础URL: {base_url}")
+
             return {
                 "model_name": model_name,
                 "provider": 'deepseek',
@@ -473,24 +470,22 @@ class ReportSimplifier:
                 "api_key": api_key
             }
         else:
-            model_name = unified_config.get_quick_analysis_model()
-            from app.services.simple_analysis_service import get_provider_and_url_by_model_sync
-            provider_info = get_provider_and_url_by_model_sync(model_name)    
             
-            logger.info(f"  模型: {model_name}")
-            logger.info(f"  提供商: {provider_info['provider']}")
-            logger.info(f"  后端URL: {provider_info['backend_url']}")
-            
+            base_url = os.getenv("BYTE_DEEPSEEK_BASE_URL")
+            api_key = os.getenv("BYTE_DEEPSEEK_API_KEY") 
+            logger.info(f"  字节跳动报告模型: {model_name}")
+            logger.info(f"  字节跳动基础URL: {base_url}")
             return {
                 "model_name": model_name,
-                "provider": provider_info["provider"],
-                "backend_url": provider_info["backend_url"],
-                "api_key": provider_info.get("api_key")
-            }
+                "provider": 'chatbyte',
+                "backend_url": base_url,
+                "api_key": api_key
+            } 
+
     
     async def _generate_html_by_llm(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> tuple[str, str, bool]:
         """调用LLM生成HTML页面，返回(html_content, raw_response, is_fallback)"""
-        max_retries = 2
+        max_retries = 3
         retry_delay = 1
         last_response = ""
         is_fallback = False  # 新增：标记是否使用备用模板
@@ -520,6 +515,8 @@ class ReportSimplifier:
                 )
                 
                 logger.info(f"📝 HTML生成提示词长度: {len(prompt)} 字符")
+                logger.info(f"  模型: {llm_config['model_name']}")
+                logger.info(f"  供应商: {llm_config['provider']}")
                 
                 llm = create_llm_by_provider(
                     provider=llm_config["provider"],
@@ -527,7 +524,7 @@ class ReportSimplifier:
                     backend_url=llm_config["backend_url"],
                     temperature=0.4,
                     max_tokens=4000,
-                    timeout=80,
+                    timeout=200,
                     api_key=llm_config["api_key"]
                 )
                 
