@@ -585,18 +585,18 @@ async def lifespan(app: FastAPI):
         from app.worker.akshare_sync_service import get_akshare_sync_service
 
         async def run_news_sync():
-            """运行新闻同步任务 - 使用AKShare同步自选股新闻"""
+            """运行新闻同步任务 - 使用AKShare同步所有股票新闻"""
             try:
-                logger.info("📰 开始新闻数据同步（AKShare - 仅自选股）...")
+                logger.info("📰 开始新闻数据同步（AKShare - 所有股票）...")
                 service = await get_akshare_sync_service()
                 result = await service.sync_news_data(
-                    symbols=None,  # None + favorites_only=True 表示只同步自选股
+                    symbols=None,           # None 表示自动获取股票列表
                     max_news_per_stock=settings.NEWS_SYNC_MAX_PER_SOURCE,
-                    favorites_only=True  # 只同步自选股
+                    favorites_only=False    # 改为 False，同步所有股票
                 )
                 logger.info(
                     f"✅ 新闻同步完成: "
-                    f"处理{result['total_processed']}只自选股, "
+                    f"处理{result['total_processed']}只股票, "
                     f"成功{result['success_count']}只, "
                     f"失败{result['error_count']}只, "
                     f"新闻总数{result['news_count']}条, "
