@@ -33,7 +33,7 @@ class RechargePackageService:
                 "package_id": "PACK_000",
                 "name": "测试包",
                 "price": 0.01,
-                "power": 100000,
+                "power": 100,
                 "bonus": 0,
                 "popular": False,
                 "description": "测试包⚡",

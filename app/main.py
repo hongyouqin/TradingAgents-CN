@@ -610,6 +610,7 @@ async def lifespan(app: FastAPI):
         logger.info("🇭🇰 港股数据采用按需获取+缓存模式")
         logger.info("🇺🇸 美股数据采用按需获取+缓存模式")
 
+        logger.info(f"📰 新闻同步配置: ENABLED={settings.NEWS_SYNC_ENABLED}, CRON={settings.NEWS_SYNC_CRON}")
         scheduler.add_job(
             run_news_sync,
             CronTrigger.from_crontab(settings.NEWS_SYNC_CRON, timezone=settings.TIMEZONE),
