@@ -200,7 +200,25 @@ async def get_recharge_orders(
 @router.get("/consume/price")
 async def get_analysis_price():
     """获取消费价格"""
-    return {"price": 1.8, "unit": "⚡", "desc": "分析一份报告需要消耗的算力"}
+    return {
+        "unit": "⚡",
+        "types": {
+            "standard": {
+                "name": "standard",
+                "label": "标准分析",
+                "price": 1.5,
+                "description": "快速分析，适合常规报告",
+                "unit": "⚡"
+            },
+            "deep": {
+                "name": "deep",
+                "label": "深度推理",
+                "price": 1.8,
+                "description": "深度分析，适合复杂报告",
+                "unit": "⚡"
+            }
+        }
+    }
 
 
 # ==================== 微信支付回调 ====================

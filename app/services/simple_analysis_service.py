@@ -291,7 +291,7 @@ def _get_env_api_key_for_provider(provider: str) -> str:
         "dashscope": "DASHSCOPE_API_KEY",
         "openai": "OPENAI_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY",
-        "deepseek-reasoner": "DEEPSEEK_API_KEY",
+        "deepseek-reasoner": "DEEPSEEK_REASONER_API_KEY",
         "chatbyte": "BYTE_DEEPSEEK_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",

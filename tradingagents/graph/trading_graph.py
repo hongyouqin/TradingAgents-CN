@@ -107,13 +107,13 @@ def create_llm_by_provider(provider: str, model: str, backend_url: str, temperat
         )
     elif provider.lower() == "deepseek-reasoner":
         # 优先使用传入的 API Key，否则从环境变量读取
-        deepseek_api_key = api_key or os.getenv('DEEPSEEK_API_KEY')
-        if not deepseek_api_key:
+        deepseek_reasoner_api_key = api_key or os.getenv('DEEPSEEK_REASONER_API_KEY')
+        if not deepseek_reasoner_api_key:
             raise ValueError("使用DeepSeek需要设置DEEPSEEK_API_KEY环境变量或在数据库中配置API Key")
 
         return ChatDeepSeek(
             model=model,
-            api_key=deepseek_api_key,
+            api_key=deepseek_reasoner_api_key,
             base_url=backend_url,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -569,7 +569,53 @@ class TradingAgentsGraph:
                 timeout=quick_timeout
             )
             logger.info("✅ [字节跳动deepseek] 已启用token统计功能并应用用户配置的模型参数")
-        elif (self.config["llm_provider"].lower() == "deepseek" or self.config["llm_provider"].lower() == "deepseek-reasoner"):
+        elif (self.config["llm_provider"].lower() == "deepseek-reasoner"):
+             # DeepSeek V3配置 - 使用支持token统计的适配器
+            from tradingagents.llm_adapters.deepseek_adapter import ChatDeepSeek
+
+            deepseek_reasoner_api_key = os.getenv('DEEPSEEK_REASONER_API_KEY')
+            if not deepseek_api_key:
+                raise ValueError("使用DeepSeek推理模型需要设置DEEPSEEK_REASONER_API_KEY环境变量")
+
+            deepseek_reasoner_base_url = os.getenv('DEEPSEEK_REASONER__BASE_URL', 'https://api.deepseek.com')
+
+            # 🔧 从配置中读取模型参数（优先使用用户配置，否则使用默认值）
+            quick_config = self.config.get("quick_model_config", {})
+            deep_config = self.config.get("deep_model_config", {})
+
+            # 读取快速模型参数c
+            quick_max_tokens = quick_config.get("max_tokens", 4000)
+            quick_temperature = quick_config.get("temperature", 0.7)
+            quick_timeout = quick_config.get("timeout", 180)
+
+            # 读取深度模型参数
+            deep_max_tokens = deep_config.get("max_tokens", 4000)
+            deep_temperature = deep_config.get("temperature", 0.7)
+            deep_timeout = deep_config.get("timeout", 180)
+
+            logger.info(f"🔧 [DeepSeekReasoner-快速模型] max_tokens={quick_max_tokens}, temperature={quick_temperature}, timeout={quick_timeout}s")
+            logger.info(f"🔧 [DeepSeekReasoner-深度模型] max_tokens={deep_max_tokens}, temperature={deep_temperature}, timeout={deep_timeout}s")
+
+            # 使用支持token统计的DeepSeek适配器
+            self.deep_thinking_llm = ChatDeepSeek(
+                model=self.config["deep_think_llm"],
+                api_key=deepseek_reasoner_api_key,
+                base_url=deepseek_reasoner_base_url,
+                temperature=deep_temperature,
+                max_tokens=deep_max_tokens,
+                timeout=deep_timeout
+            )
+            self.quick_thinking_llm = ChatDeepSeek(
+                model=self.config["quick_think_llm"],
+                api_key=deepseek_reasoner_api_key,
+                base_url=deepseek_reasoner_base_url,
+                temperature=quick_temperature,
+                max_tokens=quick_max_tokens,
+                timeout=quick_timeout
+            )
+
+            logger.info("✅ [DeepSeekReasoner 已启用token统计功能并应用用户配置的模型参数")
+        elif (self.config["llm_provider"].lower() == "deepseek"):
             # DeepSeek V3配置 - 使用支持token统计的适配器
             from tradingagents.llm_adapters.deepseek_adapter import ChatDeepSeek
 

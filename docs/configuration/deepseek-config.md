@@ -49,7 +49,7 @@ DEEPSEEK_ENABLED=true
 **说明**：
 - ✅ **deepseek-chat**：最适合股票投资分析，平衡了技术分析和自然语言表达
 - ⚠️ **deepseek-coder**：虽然支持工具调用，但专注代码任务，在投资建议表达方面不如通用模型
-- ❌ **deepseek-reasoner**：不支持工具调用，不适用于TradingAgents的智能体架构
+
 
 ### 3. Web界面配置
 

@@ -457,11 +457,23 @@ class ReportSimplifier:
     def _get_llm_config(self) -> Dict[str, Any]:
         """获取LLM配置"""
         model_name = unified_config.get_quick_analysis_model()
-        if model_name.lower() == "deepseek-chat" or model_name.lower() == "deepseek-reasoner":
+        if model_name.lower() == "deepseek-chat":
             base_url = os.getenv("DEEPSEEK_BASE_URL")
             api_key = os.getenv("DEEPSEEK_API_KEY")
             logger.info(f"  deepseek报告模型: {model_name}")
             logger.info(f"  deepseek基础URL: {base_url}")
+
+            return {
+                "model_name": model_name,
+                "provider": 'deepseek',
+                "backend_url": base_url,
+                "api_key": api_key
+            }
+        elif model_name.lower() == "deepseek-reasoner":
+            base_url = os.getenv("DEEPSEEK_REASONER__BASE_URL")
+            api_key = os.getenv("DEEPSEEK_REASONER_API_KEY")
+            logger.info(f"  deepseek reasoner报告模型: {model_name}")
+            logger.info(f"  deepseek reasoner基础URL: {base_url}")
 
             return {
                 "model_name": model_name,
@@ -488,7 +500,7 @@ class ReportSimplifier:
         max_retries = 3
         retry_delay = 1
         last_response = ""
-        is_fallback = False  # 新增：标记是否使用备用模板
+        is_fallback = False
         
         logger.info(f"🔍 _generate_html_by_llm 收到参数:")
         logger.info(f"  stock_code: {stock_code}")
@@ -499,6 +511,13 @@ class ReportSimplifier:
             try:
                 llm_config = self._get_llm_config()
                 
+                # 添加配置检查日志
+                logger.info(f"🔧 LLM配置检查:")
+                logger.info(f"  provider: {llm_config.get('provider')}")
+                logger.info(f"  model_name: {llm_config.get('model_name')}")
+                # logger.info(f"  has_api_key: {bool(llm_config.get('api_key'))}")
+                logger.info(f"  backend_url: {llm_config.get('backend_url')}")
+                
                 # 准备增强数据
                 enhanced_data = {
                     "stock_code": stock_code,
@@ -507,7 +526,7 @@ class ReportSimplifier:
                     **simplified_data
                 }
                 
-                # 格式化提示词，传入所有需要的变量
+                # 格式化提示词
                 prompt = self._html_generation_prompt.format(
                     stock_code=stock_code,
                     stock_name=stock_name,
@@ -518,22 +537,34 @@ class ReportSimplifier:
                 logger.info(f"  模型: {llm_config['model_name']}")
                 logger.info(f"  供应商: {llm_config['provider']}")
                 
+                # 增加超时和token配置
                 llm = create_llm_by_provider(
                     provider=llm_config["provider"],
                     model=llm_config["model_name"],
                     backend_url=llm_config["backend_url"],
                     temperature=0.4,
-                    max_tokens=4000,
-                    timeout=200,
+                    max_tokens=8000,  # 增加到8000，确保能生成完整HTML
+                    timeout=300,      # 增加到300秒（5分钟）
                     api_key=llm_config["api_key"]
                 )
                 
                 loop = asyncio.get_event_loop()
+                start_time = asyncio.get_event_loop().time()
                 
-                if hasattr(llm, 'ainvoke'):
-                    response = await llm.ainvoke(prompt)
-                else:
-                    response = await loop.run_in_executor(None, llm.invoke, prompt)
+                try:
+                    if hasattr(llm, 'ainvoke'):
+                        response = await asyncio.wait_for(llm.ainvoke(prompt), timeout=300)
+                    else:
+                        response = await asyncio.wait_for(
+                            loop.run_in_executor(None, llm.invoke, prompt), 
+                            timeout=300
+                        )
+                except asyncio.TimeoutError:
+                    logger.error(f"⏰ LLM调用超时（300秒）")
+                    raise TimeoutError("LLM生成HTML超时")
+                
+                elapsed = asyncio.get_event_loop().time() - start_time
+                logger.info(f"⏱️ LLM调用耗时: {elapsed:.2f}秒")
                 
                 if hasattr(response, 'content'):
                     content = response.content
@@ -544,6 +575,7 @@ class ReportSimplifier:
                 
                 last_response = content
                 logger.info(f"✅ HTML生成响应长度: {len(content)} 字符")
+                logger.info(f"  耗时: {elapsed:.2f}秒")
                 
                 # 保存原始HTML响应到文件
                 await self._save_raw_response_to_file(
@@ -557,26 +589,39 @@ class ReportSimplifier:
                 
                 html_content = self._extract_html_from_response(content)
                 
-                if "<!DOCTYPE html>" in html_content and "<html" in html_content:
+                # 验证HTML完整性
+                if "<!DOCTYPE html>" in html_content and "<html" in html_content and "</html>" in html_content:
                     logger.info(f"✅ HTML验证通过，使用LLM生成的模板")
-                    return html_content, last_response, is_fallback  # is_fallback = False
+                    return html_content, last_response, is_fallback
+                elif "<html" in html_content:
+                    if "<!DOCTYPE html>" not in html_content:
+                        html_content = "<!DOCTYPE html>\n" + html_content
+                    if "</html>" not in html_content:
+                        html_content += "\n</html>"
+                    logger.info(f"⚠️ HTML不完整，已修复，使用LLM生成的模板")
+                    return html_content, last_response, is_fallback
                 else:
-                    if "<html" in html_content:
-                        if "<!DOCTYPE html>" not in html_content:
-                            html_content = "<!DOCTYPE html>\n" + html_content
-                        logger.info(f"⚠️ HTML缺少DOCTYPE，已补充，使用LLM生成的模板")
-                        return html_content, last_response, is_fallback  # is_fallback = False
-                    else:
-                        logger.warning(f"⚠️ 生成的HTML不完整，将在下一次尝试或回退到备用模板")
-                        raise ValueError("生成的HTML不完整")
+                    logger.warning(f"⚠️ 生成的HTML不完整，将在下一次尝试或回退到备用模板")
+                    raise ValueError("生成的HTML不完整")
+                    
+            except asyncio.TimeoutError as e:
+                logger.warning(f"⏰ HTML生成超时 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                else:
+                    logger.error("❌ 所有重试都超时，使用备用模板")
+                    is_fallback = True
+                    fallback_html = self._generate_fallback_html(stock_code, stock_name, simplified_data)
+                    return fallback_html, last_response, is_fallback
                     
             except Exception as e:
                 logger.warning(f"⚠️ HTML生成失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                logger.exception(f"详细错误信息:")  # 添加完整堆栈
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay * (2 ** attempt))
                 else:
                     logger.error("❌ HTML生成失败，使用备用模板")
-                    is_fallback = True  # 标记使用备用模板
+                    is_fallback = True
                     fallback_html = self._generate_fallback_html(stock_code, stock_name, simplified_data)
                     return fallback_html, last_response, is_fallback
         
