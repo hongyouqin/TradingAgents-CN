@@ -240,12 +240,9 @@ async def submit_single_analysis(
                     
                     if success:
                         logger.info(f"✅ 分析成功并确认扣款: {task_id}")
-                        # 更新任务支付状态
-                        await service.update_task_payment_status(task_id, 'PAID')
                     else:
                         # 确认扣款失败（异常情况）
-                        logger.error(f"❌ 分析成功但确认扣款失败: {task_id}, {msg}")
-                        await service.update_task_payment_status(task_id, 'PAYMENT_FAILED')
+                        logger.error(f"🚨 严重告警: 确认扣款失败,用户白嫖一次! task_id={task_id}, order_no={consume_no}, msg={msg}")
                 else:
                     # 分析失败：取消扣款（解冻金额）
                     await power_account_service.cancel_consume(
@@ -253,7 +250,6 @@ async def submit_single_analysis(
                         reason="分析失败"
                     )
                     logger.info(f"⚠️ 分析失败，取消扣款: {task_id}")
-                    await service.update_task_payment_status(task_id, 'FAILED_NO_CHARGE')
                     
             except Exception as e:
                 logger.error(f"❌ 后台任务异常: {task_id}, {e}")
@@ -262,7 +258,6 @@ async def submit_single_analysis(
                     order_no=consume_no,
                     reason=f"系统异常: {str(e)}"
                 )
-                await service.update_task_payment_status(task_id, 'FAILED_NO_CHARGE')
         
         background_tasks.add_task(run_analysis_task)
         
