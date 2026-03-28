@@ -1048,6 +1048,7 @@ class SimpleAnalysisService:
                     analysis_id=task_id,
                     stock_code=stock_code,
                     stock_name=validation_result.stock_name,
+                    mode_name= request.parameters.quick_analysis_model if request.parameters and request.parameters.quick_analysis_model else "deepseek-chat",
                     original_content=original_content
                 )
                 
@@ -1141,6 +1142,7 @@ class SimpleAnalysisService:
         analysis_id: str, 
         stock_code: str,
         stock_name: str,
+        mode_name: str,
         original_content: Dict[str, Any]
     ) -> Any:
         """异步生成简化报告（等待完成并返回结果）"""
@@ -1149,7 +1151,7 @@ class SimpleAnalysisService:
             
             # 获取简化报告服务实例
             simplifier = get_report_simplifier()
-            
+            simplifier.model_name = mode_name# 设置模型名称，影响提示词和生成逻辑
             # 创建请求
             request = SimplifiedReportRequest(
                 analysis_id=analysis_id,

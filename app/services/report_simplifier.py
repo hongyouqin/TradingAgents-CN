@@ -104,6 +104,7 @@ class ReportSimplifier:
         self._cache = {}
         self._prompt_template = self._load_prompt_template()
         self._html_generation_prompt = self._load_html_generation_prompt()
+        self.model_name = unified_config.get_quick_analysis_model()
         logger.info("✅ ReportSimplifier 初始化完成")
     
     def _load_prompt_template(self) -> str:
@@ -456,7 +457,8 @@ class ReportSimplifier:
     
     def _get_llm_config(self) -> Dict[str, Any]:
         """获取LLM配置"""
-        model_name = unified_config.get_quick_analysis_model()
+        model_name = self.model_name
+        logger.info(f"🔧 简化报告获取LLM配置: 模型名称={model_name}")
         if model_name.lower() == "deepseek-chat":
             base_url = os.getenv("DEEPSEEK_BASE_URL")
             api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -481,8 +483,7 @@ class ReportSimplifier:
                 "backend_url": base_url,
                 "api_key": api_key
             }
-        else:
-            
+        elif model_name.lower() == "chatbyte":
             base_url = os.getenv("BYTE_DEEPSEEK_BASE_URL")
             api_key = os.getenv("BYTE_DEEPSEEK_API_KEY") 
             logger.info(f"  字节跳动报告模型: {model_name}")
@@ -494,6 +495,20 @@ class ReportSimplifier:
                 "api_key": api_key
             } 
 
+        else:
+            # 默认使用deepseek-chat
+            base_url = os.getenv("DEEPSEEK_BASE_URL")
+            api_key = os.getenv("DEEPSEEK_API_KEY")
+            logger.info(f"  deepseek报告模型: {model_name}")
+            logger.info(f"  deepseek基础URL: {base_url}")
+
+            return {
+                "model_name": model_name,
+                "provider": 'deepseek',
+                "backend_url": base_url,
+                "api_key": api_key
+            }
+   
     
     async def _generate_html_by_llm(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> tuple[str, str, bool]:
         """调用LLM生成HTML页面，返回(html_content, raw_response, is_fallback)"""
