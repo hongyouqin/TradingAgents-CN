@@ -381,7 +381,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"⏱ 实时行情入库任务已启动: 每 {settings.QUOTES_INGEST_INTERVAL_SECONDS}s")
 
         # Tushare统一数据同步任务配置
-        logger.info("🔄 配置Tushare统一数据同步任务... 总开关= {settings.TUSHARE_UNIFIED_ENABLED}")
+        logger.info(f"🔄 配置Tushare统一数据同步任务... 总开关= {settings.TUSHARE_UNIFIED_ENABLED}")
 
         # 基础信息同步任务
         scheduler.add_job(
@@ -451,7 +451,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"🔍 Tushare状态检查已配置: {settings.TUSHARE_STATUS_CHECK_CRON}")
 
         # AKShare统一数据同步任务配置
-        logger.info("🔄 配置AKShare统一数据同步任务... 总开关={settings.AKSHARE_UNIFIED_ENABLED}")
+        logger.info(f"🔄 配置AKShare统一数据同步任务... 总开关={settings.AKSHARE_UNIFIED_ENABLED}")
 
         # 基础信息同步任务
         scheduler.add_job(
@@ -525,7 +525,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"🔍 AKShare状态检查已配置: {settings.AKSHARE_STATUS_CHECK_CRON}")
 
         # BaoStock统一数据同步任务配置
-        logger.info("🔄 配置BaoStock统一数据同步任务...")
+        logger.info(f"🔄 配置BaoStock统一数据同步任务... 开关={settings.BAOSTOCK_UNIFIED_ENABLED}")
 
         # 基础信息同步任务
         scheduler.add_job(
