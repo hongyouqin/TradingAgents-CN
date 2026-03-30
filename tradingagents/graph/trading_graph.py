@@ -576,7 +576,7 @@ class TradingAgentsGraph:
             from tradingagents.llm_adapters.deepseek_adapter import ChatDeepSeek
 
             deepseek_reasoner_api_key = os.getenv('DEEPSEEK_REASONER_API_KEY')
-            if not deepseek_api_key:
+            if not deepseek_reasoner_api_key:
                 raise ValueError("使用DeepSeek推理模型需要设置DEEPSEEK_REASONER_API_KEY环境变量")
 
             logger.info(f"[DeepSeek推理模型] API Key 来源: {'环境变量'},key= {deepseek_reasoner_api_key}")
