@@ -577,6 +577,7 @@ class TradingAgentsGraph:
             if not deepseek_api_key:
                 raise ValueError("使用DeepSeek推理模型需要设置DEEPSEEK_REASONER_API_KEY环境变量")
 
+            logger.info(f"[DeepSeek推理模型] API Key 来源: {'环境变量'},key= {deepseek_reasoner_api_key}")
             deepseek_reasoner_base_url = os.getenv('DEEPSEEK_REASONER__BASE_URL', 'https://api.deepseek.com')
 
             # 🔧 从配置中读取模型参数（优先使用用户配置，否则使用默认值）

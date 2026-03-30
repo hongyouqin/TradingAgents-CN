@@ -92,20 +92,12 @@ class UnifiedNewsAnalyzer:
 
     def _get_news_from_database(self, stock_code: str, max_news: int = 10) -> str:
         """
-        从数据库获取新闻
-
-        Args:
-            stock_code: 股票代码
-            max_news: 最大新闻数量
-
-        Returns:
-            str: 格式化的新闻内容，如果没有新闻则返回空字符串
+        从数据库获取最近15天内的股票新闻（仅近期有效数据，无历史兜底）
         """
         try:
             from tradingagents.dataflows.cache.app_adapter import get_mongodb_client
-            from datetime import timedelta
+            from datetime import datetime, timedelta
 
-            # 🔧 确保 max_news 是整数（防止传入浮点数）
             max_news = int(max_news)
 
             client = get_mongodb_client()
@@ -116,37 +108,32 @@ class UnifiedNewsAnalyzer:
             db = client.get_database('tradingagents')
             collection = db.stock_news
 
-            # 标准化股票代码（去除后缀）
+            # 标准化股票代码
             clean_code = stock_code.replace('.SH', '').replace('.SZ', '').replace('.SS', '')\
-                                   .replace('.XSHE', '').replace('.XSHG', '').replace('.HK', '')
+                                .replace('.XSHE', '').replace('.XSHG', '').replace('.HK', '')
 
-            # 查询最近30天的新闻（扩大时间范围）
-            thirty_days_ago = datetime.now() - timedelta(days=30)
+            # 只查最近 15 天
+            days_limit = 15
+            cutoff_time = datetime.now() - timedelta(days=days_limit)
 
-            # 尝试多种查询方式（使用 symbol 字段）
-            query_list = [
-                {'symbol': clean_code, 'publish_time': {'$gte': thirty_days_ago}},
-                {'symbol': stock_code, 'publish_time': {'$gte': thirty_days_ago}},
-                {'symbols': clean_code, 'publish_time': {'$gte': thirty_days_ago}},
-                # 如果最近30天没有新闻，则查询所有新闻（不限时间）
-                {'symbol': clean_code},
-                {'symbols': clean_code},
-            ]
+            # 精确查询：15天内 + 股票代码
+            query = {
+                "$or": [
+                    {"symbol": clean_code},
+                    {"symbols": clean_code}
+                ],
+                "publish_time": {"$gte": cutoff_time}
+            }
 
-            news_items = []
-            for query in query_list:
-                cursor = collection.find(query).sort('publish_time', -1).limit(max_news)
-                news_items = list(cursor)
-                if news_items:
-                    logger.info(f"[统一新闻工具] 📊 使用查询 {query} 找到 {len(news_items)} 条新闻")
-                    break
+            # 最新在前，最多返回 max_news 条
+            news_items = list(collection.find(query).sort("publish_time", -1).limit(max_news))
 
             if not news_items:
-                logger.info(f"[统一新闻工具] 数据库中没有找到 {stock_code} 的新闻")
+                logger.info(f"[统一新闻工具] 数据库中近{days_limit}天无 {stock_code} 新闻")
                 return ""
 
-            # 格式化新闻
-            report = f"# {stock_code} 最新新闻 (数据库缓存)\n\n"
+            # 格式化输出
+            report = f"# {stock_code} 近期新闻（{days_limit}天内）\n\n"
             report += f"📅 查询时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             report += f"📊 新闻数量: {len(news_items)} 条\n\n"
 
@@ -157,7 +144,6 @@ class UnifiedNewsAnalyzer:
                 publish_time = news.get('publish_time', datetime.now())
                 sentiment = news.get('sentiment', 'neutral')
 
-                # 情绪图标
                 sentiment_icon = {
                     'positive': '📈',
                     'negative': '📉',
@@ -169,13 +155,12 @@ class UnifiedNewsAnalyzer:
                 report += f"**情绪**: {sentiment}\n\n"
 
                 if content:
-                    # 限制内容长度
                     content_preview = content[:500] + '...' if len(content) > 500 else content
                     report += f"{content_preview}\n\n"
 
                 report += "---\n\n"
 
-            logger.info(f"[统一新闻工具] ✅ 成功从数据库获取并格式化 {len(news_items)} 条新闻")
+            logger.info(f"[统一新闻工具] ✅ 近{days_limit}天新闻获取成功：{stock_code} {len(news_items)}条")
             return report
 
         except Exception as e:
@@ -183,7 +168,6 @@ class UnifiedNewsAnalyzer:
             import traceback
             logger.error(traceback.format_exc())
             return ""
-
     def _sync_news_from_akshare(self, stock_code: str, max_news: int = 10) -> bool:
         """
         从AKShare同步新闻到数据库（同步方法）

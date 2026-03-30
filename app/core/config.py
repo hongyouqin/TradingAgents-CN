@@ -48,7 +48,10 @@ class Settings(BaseSettings):
     _wechat_api_key: Optional[str] = None
     _wechat_notify_url: Optional[str] = None
     _wechat_h5_redirect_url: Optional[str] = None
-    
+    # jsapi调用相关key
+    _wechat_api_v3_key: Optional[str] = None # APIv3 密钥
+    _wechat_mch_serial_no: Optional[str] = None # 商户证书序列号
+    _wechat_mch_private_key: Optional[str] = None # 商户私钥（PEM 格式）
     
     # 阿里云短信RAMKey配置
     _sms_access_key_id: Optional[str] = None
@@ -109,6 +112,27 @@ class Settings(BaseSettings):
                 ''
             )
         return self._wechat_h5_redirect_url
+    
+    @property
+    def WECHAT_API_V3_KEY(self) -> Optional[str]:
+        """延迟加载微信APIv3密钥"""
+        if self._wechat_api_v3_key is None:
+            self._wechat_api_v3_key = os.environ.get('WECHAT_API_V3_KEY')
+        return self._wechat_api_v3_key
+    
+    @property
+    def WECHAT_MCH_SERIAL_NO(self) -> Optional[str]:
+        """延迟加载微信商户证书序列号"""
+        if self._wechat_mch_serial_no is None:
+            self._wechat_mch_serial_no = os.environ.get('WECHAT_MCH_SERIAL_NO')
+        return self._wechat_mch_serial_no
+    
+    @property
+    def WECHAT_MCH_PRIVATE_KEY(self) -> Optional[str]:
+        """延迟加载微信商户私钥"""
+        if self._wechat_mch_private_key is None:
+            self._wechat_mch_private_key = os.environ.get('WECHAT_MCH_PRIVATE_KEY')
+        return self._wechat_mch_private_key
     
     def validate_wechat_config(self) -> tuple[bool, str]:
         """验证微信支付配置是否完整"""
@@ -285,7 +309,7 @@ class Settings(BaseSettings):
     TUSHARE_RATE_LIMIT_SAFETY_MARGIN: float = Field(default=0.8, ge=0.1, le=1.0, description="速率限制安全边际")
 
     # Tushare统一数据同步配置
-    TUSHARE_UNIFIED_ENABLED: bool = Field(default=True)
+    TUSHARE_UNIFIED_ENABLED: bool = Field(default=False)
     TUSHARE_BASIC_INFO_SYNC_ENABLED: bool = Field(default=True)
     TUSHARE_BASIC_INFO_SYNC_CRON: str = Field(default="0 2 * * *")  # 每日凌晨2点
     TUSHARE_QUOTES_SYNC_ENABLED: bool = Field(default=True)
@@ -303,7 +327,7 @@ class Settings(BaseSettings):
     TUSHARE_INIT_AUTO_START: bool = Field(default=False, description="应用启动时自动检查并初始化数据")
 
     # AKShare统一数据同步配置
-    AKSHARE_UNIFIED_ENABLED: bool = Field(default=True, description="启用AKShare统一数据同步")
+    AKSHARE_UNIFIED_ENABLED: bool = Field(default=False, description="启用AKShare统一数据同步")
     AKSHARE_BASIC_INFO_SYNC_ENABLED: bool = Field(default=True, description="启用基础信息同步")
     AKSHARE_BASIC_INFO_SYNC_CRON: str = Field(default="0 3 * * *", description="基础信息同步CRON表达式")  # 每日凌晨3点
     AKSHARE_QUOTES_SYNC_ENABLED: bool = Field(default=True, description="启用行情同步")
@@ -332,7 +356,7 @@ class Settings(BaseSettings):
     BAOSTOCK_UNIFIED_ENABLED: bool = Field(default=True, description="启用BaoStock统一数据同步")
 
     # BaoStock数据同步任务配置
-    BAOSTOCK_BASIC_INFO_SYNC_ENABLED: bool = Field(default=True, description="启用基础信息同步")
+    BAOSTOCK_BASIC_INFO_SYNC_ENABLED: bool = Field(default=False, description="启用基础信息同步")
     BAOSTOCK_BASIC_INFO_SYNC_CRON: str = Field(default="0 4 * * *", description="基础信息同步CRON表达式")  # 每日凌晨4点
     BAOSTOCK_DAILY_QUOTES_SYNC_ENABLED: bool = Field(default=True, description="启用日K线同步（注意：BaoStock不支持实时行情）")
     BAOSTOCK_DAILY_QUOTES_SYNC_CRON: str = Field(default="0 16 * * 1-5", description="日K线同步CRON表达式")  # 工作日收盘后16:00
