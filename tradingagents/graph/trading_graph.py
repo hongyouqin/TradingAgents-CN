@@ -267,6 +267,8 @@ class TradingAgentsGraph:
         deep_provider = self.config.get("deep_provider")
         quick_backend_url = self.config.get("quick_backend_url")
         deep_backend_url = self.config.get("deep_backend_url")
+        
+        logger.info(f"🔍 ** 检查模型配置: quick_provider={quick_provider}, deep_provider={deep_provider} quick_back_uro = {quick_backend_url}")
 
         if quick_provider and deep_provider and quick_provider != deep_provider:
             # 混合模式：快速模型和深度模型来自不同厂家
