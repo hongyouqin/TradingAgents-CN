@@ -105,6 +105,7 @@ class User(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
     phone: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')
+    openid :str = Field(None, description="微信openid")
     hashed_password: str
     is_active: bool = True
     is_verified: bool = False
@@ -182,6 +183,7 @@ class UserUpdate(BaseModel):
     preferences: Optional[UserPreferences] = None
     daily_quota: Optional[int] = None
     concurrent_limit: Optional[int] = None
+    openid: Optional[str] = None  # 微信openid，后续可能用于微信登录绑定
 
 
 class UserResponse(BaseModel):

@@ -229,7 +229,7 @@ class OrderService:
             # 调用微信统一下单
             result = await wechat_pay_service.unified_order(**unified_order_params)
             
-            logger.info(f"📱 微信统一下单结果: {result}, 订单号: {order_no}, 支付类型: {order['trade_type']}")
+            logger.info(f"📱 微信统一下单结果: {result}, openid={openid} 订单号: {order_no}, 支付类型: {order['trade_type']}")
             if result.get('return_code') != 'SUCCESS' or result.get('result_code') != 'SUCCESS':
                 return None, f"微信支付下单失败: {result.get('return_msg')}"
             

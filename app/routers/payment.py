@@ -2,11 +2,12 @@ from decimal import Decimal
 import logging
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.models.prepare_payment_request import PreparePaymentRequest
 from app.models.user import User
 from app.routers.auth_db import get_current_user
+from app.services.user_service import user_service
 from app.services.wechat_pay_service import wechat_pay_service
 from app.services.order_service import order_service
 from app.services.power_account_service import power_account_service
@@ -129,7 +130,6 @@ async def create_recharge_order(
 async def prepare_recharge_payment(
     order_no: str,
     payment_request: Optional[PreparePaymentRequest] = None,  # 使用模型
-    openid: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -148,6 +148,7 @@ async def prepare_recharge_payment(
         redirect_url = settings.WECHAT_H5_REDIRECT_URL
     
     # 调用订单服务准备支付
+    openid = current_user.get("openid")   # 从当前用户获取openid
     payment_params, error = await order_service.prepare_recharge_payment(
         user=current_user,
         order_no=order_no,
@@ -222,7 +223,6 @@ async def get_analysis_price():
 
 
 # ==================== 微信支付回调 ====================
-
 @router.post("/wxpay/notify")
 async def wechat_pay_notify(request: Request):
     """
@@ -262,6 +262,36 @@ async def wechat_pay_notify(request: Request):
             media_type="text/xml"
         )
 
+
+@router.get("/wechat/callback")
+async def wechat_callback(
+    code: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    微信授权回调（最安全版本）
+    不需要 state，不需要传参
+    直接获取当前登录用户
+    """
+    username = current_user["username"]
+    logger.info(f"微信授权回调，当前用户: {username}, code: {code}")
+
+    try:
+        # 1. 获取 openid
+        data = await wechat_pay_service.get_openid_by_code(code)
+        openid = data["openid"]
+
+        # 2. 直接保存到【当前登录用户】（安全！）
+        await user_service.update_user_openid(username, openid)
+
+        logger.info(f"✅ 用户 {username} 绑定 openid 成功: {openid}")
+
+        # 3. 跳回支付页面，完全不返回任何敏感信息
+        return HTMLResponse("<h3>微信支付授权成功</h3>")
+
+    except Exception as e:
+        logger.error(f"微信授权失败: {e}")
+        return HTMLResponse("<h3>微信支付授权失败</h3>")
 
 # ==================== 通用查询接口 ====================
 

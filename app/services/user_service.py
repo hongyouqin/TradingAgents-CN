@@ -724,14 +724,30 @@ class UserService:
             logger.error(f"❌ 获取用户失败: {e}")
             return None
     
+    async def update_user_openid(self, username: str, openid: str) -> bool:
+        """
+        专门用于保存微信 openid
+        微信授权回调里直接调用！
+        """
+        try:
+            result = self.users_collection.update_one(
+                {"username": username},
+                {"$set": {
+                    "openid": openid,
+                    "updated_at": datetime.utcnow()
+                }}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"保存 openid 失败: {e}")
+            return False
+    
     async def update_user(self, username: str, user_data: UserUpdate) -> Optional[User]:
         """更新用户信息"""
         try:
             update_data = {"updated_at": datetime.utcnow()}
             
-            # 只更新提供的字段
             if user_data.email:
-                # 检查邮箱是否已被其他用户使用
                 existing_email = self.users_collection.find_one({
                     "email": user_data.email,
                     "username": {"$ne": username}
@@ -749,6 +765,11 @@ class UserService:
             
             if user_data.concurrent_limit is not None:
                 update_data["concurrent_limit"] = user_data.concurrent_limit
+
+            # ====================== 新增：保存 openid ======================
+            if user_data.openid:
+                update_data["openid"] = user_data.openid
+            # ===============================================================
             
             result = self.users_collection.update_one(
                 {"username": username},
@@ -765,7 +786,7 @@ class UserService:
         except Exception as e:
             logger.error(f"❌ 更新用户信息失败: {e}")
             return None
-    
+  
     async def change_password(self, username: str, old_password: str, new_password: str) -> bool:
         """修改密码"""
         try:

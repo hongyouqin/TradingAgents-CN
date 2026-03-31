@@ -308,6 +308,7 @@ async def get_current_user(
             "username": user.username,
             "email": user.email,
             "name": user.username,
+            "openid":user.openid,
             "is_admin": user.is_admin,
             "roles": ["admin"] if user.is_admin else ["user"],
             "preferences": user.preferences.model_dump() if user.preferences else {}
