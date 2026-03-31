@@ -403,6 +403,22 @@ class UnifiedNewsAnalyzer:
         logger.error(f"[统一新闻工具] {error_msg}")
         return error_msg
 
+    def _get_database_news_safe(self, stock_code: str, max_news: int, threshold: int = 50) -> Optional[str]:
+        """获取数据库新闻"""
+        try:
+            db_news = self._get_news_from_database(stock_code, max_news)
+            
+            if db_news and len(db_news.strip()) > threshold:
+                logger.info(f"[统一新闻工具] ✅ 数据库命中: {len(db_news)} 字符")
+                return db_news
+            else:
+                logger.info(f"[统一新闻工具] ⚠️ 数据库无有效数据（长度: {len(db_news) if db_news else 0}）")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"[统一新闻工具] 数据库查询异常: {e}")
+            return None
+
     @retry(max_attempts=2, delay=0.5)
     def _get_eastmoney_news_safe(self, stock_code: str, curr_date: str, threshold: int = 100) -> Optional[str]:
         """安全获取东方财富实时新闻（带重试）"""
@@ -424,6 +440,39 @@ class UnifiedNewsAnalyzer:
         
         if result and result_len > 100:
             logger.info(f"[统一新闻工具] 📋 内容预览: {result[:200]}...")
+            return result
+        
+        return None
+    
+    @retry(max_attempts=2, delay=1.0)
+    def _get_google_news_safe(self, query: str, curr_date: str, threshold: int = 50) -> Optional[str]:
+        """获取Google新闻（带重试）"""
+        if not hasattr(self.toolkit, 'get_google_news'):
+            logger.warning("[统一新闻工具] Google新闻工具不可用")
+            return None
+        
+        logger.info(f"[统一新闻工具] 📡 请求Google新闻: {query[:30]}...")
+        result = self.toolkit.get_google_news.invoke({
+            "query": query, 
+            "curr_date": curr_date
+        })
+        
+        if result and len(result.strip()) > threshold:
+            return result
+        
+        return None
+
+    @retry(max_attempts=2, delay=1.0)
+    def _get_openai_news_safe(self, curr_date: str, threshold: int = 50) -> Optional[str]:
+        """获取OpenAI全球新闻（带重试）"""
+        if not hasattr(self.toolkit, 'get_global_news_openai'):
+            logger.warning("[统一新闻工具] OpenAI新闻工具不可用")
+            return None
+        
+        logger.info(f"[统一新闻工具] 📡 请求OpenAI全球新闻...")
+        result = self.toolkit.get_global_news_openai.invoke({"curr_date": curr_date})
+        
+        if result and len(result.strip()) > threshold:
             return result
         
         return None
