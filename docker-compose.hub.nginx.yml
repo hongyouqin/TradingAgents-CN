@@ -79,6 +79,8 @@ services:
       # 如需修改配置，请修改代码后重新构建镜像
       # - ./config:/app/config
       - ./data:/app/data
+      # 👇 添加证书挂载
+      - ./certs:/app/certs:ro
     env_file:
       - .env
     environment:
