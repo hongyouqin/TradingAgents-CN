@@ -2,6 +2,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import time
 import json
 import traceback
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 
 # 导入分析模块日志装饰器
 from tradingagents.utils.tool_logging import log_analyst_module
@@ -97,35 +99,28 @@ def create_market_analyst(llm, toolkit):
     def market_analyst_node(state):
         logger.debug(f"📈 [DEBUG] ===== 市场分析师节点开始 =====")
 
-        # 🔧 工具调用计数器 - 防止无限循环
+        # 工具调用计数器
         tool_call_count = state.get("market_tool_call_count", 0)
-        max_tool_calls = 3  # 最大工具调用次数
+        max_tool_calls = 3
         logger.info(f"🔧 [死循环修复] 当前工具调用次数: {tool_call_count}/{max_tool_calls}")
 
         current_date = state["trade_date"]
         ticker = state["company_of_interest"]
 
-        logger.debug(f"📈 [DEBUG] 输入参数: ticker={ticker}, date={current_date}")
-        logger.debug(f"📈 [DEBUG] 当前状态中的消息数量: {len(state.get('messages', []))}")
-        logger.debug(f"📈 [DEBUG] 现有市场报告: {state.get('market_report', 'None')}")
+        # ====================== 自动计算 3 年前日期（Trend-Emotion-Timing 必须）======================
+        current_date_dt = datetime.strptime(current_date, "%Y-%m-%d")
+        start_date_3y = (current_date_dt - relativedelta(years=3)).strftime("%Y-%m-%d")
+        logger.info(f"📅 [3年数据] 开始日期: {start_date_3y} | 结束日期: {current_date}")
 
         # 根据股票代码格式选择数据源
         from tradingagents.utils.stock_utils import StockUtils
-
         market_info = StockUtils.get_market_info(ticker)
-
-        logger.debug(f"📈 [DEBUG] 股票类型检查: {ticker} -> {market_info['market_name']} ({market_info['currency_name']})")
-
-        # 获取公司名称
         company_name = _get_company_name(ticker, market_info)
-        logger.debug(f"📈 [DEBUG] 公司名称: {ticker} -> {company_name}")
 
-        # 统一使用 get_stock_market_data_unified 工具
-        # 该工具内部会自动识别股票类型（A股/港股/美股）并调用相应的数据源
+        # 统一工具
         logger.info(f"📊 [市场分析师] 使用统一市场数据工具，自动识别股票类型")
         tools = [toolkit.get_stock_market_data_unified]
 
-        # 安全地获取工具名称用于调试
         tool_names_debug = []
         for tool in tools:
             if hasattr(tool, 'name'):
@@ -135,9 +130,8 @@ def create_market_analyst(llm, toolkit):
             else:
                 tool_names_debug.append(str(tool))
         logger.info(f"📊 [市场分析师] 绑定的工具: {tool_names_debug}")
-        logger.info(f"📊 [市场分析师] 目标市场: {market_info['market_name']}")
 
-        # 🔥 优化：将输出格式要求放在系统提示的开头，确保LLM遵循格式
+        # ====================== 提示词：自动拉取3年数据 + Trend-Emotion-Timing ======================
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -156,9 +150,9 @@ def create_market_analyst(llm, toolkit):
                     "⚠️ 重要工作流程：\n"
                     "1. 如果消息历史中没有工具结果，立即调用 get_stock_market_data_unified 工具\n"
                     "   - ticker: {ticker}\n"
-                    "   - start_date: {current_date}\n"
+                    "   - start_date: {start_date_3y}\n"
                     "   - end_date: {current_date}\n"
-                    "   注意：系统会自动扩展到365天历史数据，你只需要传递当前分析日期即可\n"
+                    "   注意：必须获取 3 年全部日频K线数据，用于趋势-情绪-时机分析\n"
                     "2. 如果消息历史中已经有工具结果（ToolMessage），立即基于工具数据生成最终分析报告\n"
                     "3. 不要重复调用工具！一次工具调用就足够了！\n"
                     "4. 接收到工具数据后，必须立即生成完整的技术分析报告，不要再调用任何工具\n"
@@ -170,14 +164,30 @@ def create_market_analyst(llm, toolkit):
                     "- 股票代码：{ticker}\n"
                     "- 所属市场：{market_name}\n"
                     "\n"
-                    "## 📈 技术指标分析\n"
-                    "[在这里分析移动平均线、MACD、RSI、布林带等技术指标，提供具体数值]\n"
+                    "## 📈 传统技术指标分析\n"
+                    "[分析移动平均线、MACD、RSI、布林带等]\n"
+                    "\n"
+                    "## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）\n"
+                    "### 1. 趋势得分（Trend-Score）\n"
+                    "[基于多周期价格动量、均线、交叉信号，给出-1到1之间的趋势得分，判断趋势强弱]\n"
+                    "\n"
+                    "### 2. 情绪指数（Emotion-Index）\n"
+                    "[基于震荡指标与超买超卖，给出-1到1之间的情绪指数，判断市场情绪状态]\n"
+                    "\n"
+                    "### 3. 锚定趋势得分（Anchored Trend-Score）\n"
+                    "[剔除短期情绪干扰后的真实中期趋势]\n"
+                    "\n"
+                    "### 4. 时机指标（Timing-Indicator）\n"
+                    "[公式：锚定趋势得分 − 情绪指数，用于判断最佳买卖时机]\n"
+                    "- 时机指标 > 1.0：优质买入时机\n"
+                    "- 时机指标 < -1.0：优质卖出时机\n"
+                    "- 介于-1.0 ~ 1.0：观望\n"
                     "\n"
                     "## 📉 价格趋势分析\n"
-                    "[在这里分析价格趋势，考虑{market_name}市场特点]\n"
+                    "[结合趋势-情绪-时机框架，分析短期、中期趋势]\n"
                     "\n"
-                    "## 💭 投资建议\n"
-                    "[在这里给出明确的投资建议：买入/持有/卖出]\n"
+                    "## 💡 投资建议（基于时机指标）\n"
+                    "[明确给出：买入 / 持有 / 卖出，并说明依据：趋势、情绪、时机指标判断]\n"
                     "\n"
                     "⚠️ **重要提醒：**\n"
                     "- 必须使用上述格式输出，不要自创标题格式\n"
@@ -193,7 +203,6 @@ def create_market_analyst(llm, toolkit):
             ]
         )
 
-        # 安全地获取工具名称，处理函数和工具对象
         tool_names = []
         for tool in tools:
             if hasattr(tool, 'name'):
@@ -203,70 +212,38 @@ def create_market_analyst(llm, toolkit):
             else:
                 tool_names.append(str(tool))
 
-        # 🔥 设置所有模板变量
         prompt = prompt.partial(tool_names=", ".join(tool_names))
         prompt = prompt.partial(current_date=current_date)
+        prompt = prompt.partial(start_date_3y=start_date_3y)
         prompt = prompt.partial(ticker=ticker)
         prompt = prompt.partial(company_name=company_name)
         prompt = prompt.partial(market_name=market_info['market_name'])
         prompt = prompt.partial(currency_name=market_info['currency_name'])
         prompt = prompt.partial(currency_symbol=market_info['currency_symbol'])
 
-        # 添加详细日志
         logger.info(f"📊 [市场分析师] LLM类型: {llm.__class__.__name__}")
         logger.info(f"📊 [市场分析师] LLM模型: {getattr(llm, 'model_name', 'unknown')}")
-        logger.info(f"📊 [市场分析师] 消息历史数量: {len(state['messages'])}")
         logger.info(f"📊 [市场分析师] 公司名称: {company_name}")
         logger.info(f"📊 [市场分析师] 股票代码: {ticker}")
-
-        # 打印提示词模板信息
-        logger.info("📊 [市场分析师] ========== 提示词模板信息 ==========")
-        logger.info(f"📊 [市场分析师] 模板变量已设置: company_name={company_name}, ticker={ticker}, market={market_info['market_name']}")
-        logger.info("📊 [市场分析师] ==========================================")
-
-        # 打印实际传递给LLM的消息
-        logger.info(f"📊 [市场分析师] ========== 传递给LLM的消息 ==========")
-        for i, msg in enumerate(state["messages"]):
-            msg_type = type(msg).__name__
-            # 🔥 修复：更安全地提取消息内容
-            if hasattr(msg, 'content'):
-                msg_content = str(msg.content)[:500]  # 增加到500字符以便查看完整内容
-            elif isinstance(msg, tuple) and len(msg) >= 2:
-                # 处理旧格式的元组消息 ("human", "content")
-                msg_content = f"[元组消息] 类型={msg[0]}, 内容={str(msg[1])[:500]}"
-            else:
-                msg_content = str(msg)[:500]
-            logger.info(f"📊 [市场分析师] 消息[{i}] 类型={msg_type}, 内容={msg_content}")
-        logger.info(f"📊 [市场分析师] ========== 消息列表结束 ==========")
+        logger.info(f"📊 [市场分析师] 3年起始日期自动设置: {start_date_3y}")
 
         chain = prompt | llm.bind_tools(tools)
 
         logger.info(f"📊 [市场分析师] 开始调用LLM...")
-        # 修复：传递字典而不是直接传递消息列表，以便 ChatPromptTemplate 能正确处理所有变量
         result = chain.invoke({"messages": state["messages"]})
         logger.info(f"📊 [市场分析师] LLM调用完成")
-
-        # 打印LLM响应
-        logger.info(f"📊 [市场分析师] ========== LLM响应开始 ==========")
-        logger.info(f"📊 [市场分析师] 响应类型: {type(result).__name__}")
-        logger.info(f"📊 [市场分析师] 响应内容: {str(result.content)[:1000]}...")
-        if hasattr(result, 'tool_calls') and result.tool_calls:
-            logger.info(f"📊 [市场分析师] 工具调用: {result.tool_calls}")
-        logger.info(f"📊 [市场分析师] ========== LLM响应结束 ==========")
 
         # 使用统一的Google工具调用处理器
         if GoogleToolCallHandler.is_google_model(llm):
             logger.info(f"📊 [市场分析师] 检测到Google模型，使用统一工具调用处理器")
-            
-            # 创建分析提示词
+
             analysis_prompt_template = GoogleToolCallHandler.create_analysis_prompt(
                 ticker=ticker,
                 company_name=company_name,
                 analyst_type="市场分析",
-                specific_requirements="重点关注市场数据、价格走势、交易量变化等市场指标。"
+                specific_requirements="必须使用3年日频K线数据，重点做趋势-情绪-时机（Trend-Emotion-Timing）分析。"
             )
-            
-            # 处理Google模型工具调用
+
             report, messages = GoogleToolCallHandler.handle_google_tool_calls(
                 result=result,
                 llm=llm,
@@ -276,49 +253,32 @@ def create_market_analyst(llm, toolkit):
                 analyst_name="市场分析师"
             )
 
-            # 🔧 更新工具调用计数器
             return {
                 "messages": [result],
                 "market_report": report,
                 "market_tool_call_count": tool_call_count + 1
             }
         else:
-            # 非Google模型的处理逻辑
-            logger.info(f"📊 [市场分析师] 非Google模型 ({llm.__class__.__name__})，使用标准处理逻辑")
-            logger.info(f"📊 [市场分析师] 检查LLM返回结果...")
-            logger.info(f"📊 [市场分析师] - 是否有tool_calls: {hasattr(result, 'tool_calls')}")
-            if hasattr(result, 'tool_calls'):
-                logger.info(f"📊 [市场分析师] - tool_calls数量: {len(result.tool_calls)}")
-                if result.tool_calls:
-                    for i, tc in enumerate(result.tool_calls):
-                        logger.info(f"📊 [市场分析师] - tool_call[{i}]: {tc.get('name', 'unknown')}")
+            logger.info(f"📊 [市场分析师] 非Google模型，使用标准处理逻辑")
 
-            # 处理市场分析报告
             if len(result.tool_calls) == 0:
-                # 没有工具调用，直接使用LLM的回复
                 report = result.content
                 logger.info(f"📊 [市场分析师] ✅ 直接回复（无工具调用），长度: {len(report)}")
-                logger.debug(f"📊 [DEBUG] 直接回复内容预览: {report[:200]}...")
             else:
-                # 有工具调用，执行工具并生成完整分析报告
-                logger.info(f"📊 [市场分析师] 🔧 检测到工具调用: {[call.get('name', 'unknown') for call in result.tool_calls]}")
+                logger.info(f"📊 [市场分析师] 🔧 检测到工具调用")
 
                 try:
-                    # 执行工具调用
                     from langchain_core.messages import ToolMessage, HumanMessage
-
                     tool_messages = []
+
                     for tool_call in result.tool_calls:
                         tool_name = tool_call.get('name')
                         tool_args = tool_call.get('args', {})
                         tool_id = tool_call.get('id')
-
                         logger.debug(f"📊 [DEBUG] 执行工具: {tool_name}, 参数: {tool_args}")
 
-                        # 找到对应的工具并执行
                         tool_result = None
                         for tool in tools:
-                            # 安全地获取工具名称进行比较
                             current_tool_name = None
                             if hasattr(tool, 'name'):
                                 current_tool_name = tool.name
@@ -327,12 +287,7 @@ def create_market_analyst(llm, toolkit):
 
                             if current_tool_name == tool_name:
                                 try:
-                                    if tool_name == "get_china_stock_data":
-                                        # 中国股票数据工具
-                                        tool_result = tool.invoke(tool_args)
-                                    else:
-                                        # 其他工具
-                                        tool_result = tool.invoke(tool_args)
+                                    tool_result = tool.invoke(tool_args)
                                     logger.debug(f"📊 [DEBUG] 工具执行成功，结果长度: {len(str(tool_result))}")
                                     break
                                 except Exception as tool_error:
@@ -342,16 +297,13 @@ def create_market_analyst(llm, toolkit):
                         if tool_result is None:
                             tool_result = f"未找到工具: {tool_name}"
 
-                        # 创建工具消息
                         tool_message = ToolMessage(
                             content=str(tool_result),
                             tool_call_id=tool_id
                         )
                         tool_messages.append(tool_message)
 
-                    # 基于工具结果生成完整分析报告
-                    # 🔥 重要：这里必须包含公司名称和输出格式要求，确保LLM生成正确的报告标题
-                    analysis_prompt = f"""现在请基于上述工具获取的数据，生成详细的技术分析报告。
+                    analysis_prompt = f"""现在请基于上述工具获取的 3 年日频K线数据，生成详细的技术分析报告。
 
 **分析对象：**
 - 公司名称：{company_name}
@@ -361,15 +313,12 @@ def create_market_analyst(llm, toolkit):
 
 **输出格式要求（必须严格遵守）：**
 
-请按照以下专业格式输出报告，不要使用emoji符号（如📊📈📉💭等），使用纯文本标题：
-
 # **{company_name}（{ticker}）技术分析报告**
-**分析日期：[当前日期]**
+**分析日期：{current_date}**
 
 ---
 
 ## 一、股票基本信息
-
 - **公司名称**：{company_name}
 - **股票代码**：{ticker}
 - **所属市场**：{market_info['market_name']}
@@ -379,104 +328,59 @@ def create_market_analyst(llm, toolkit):
 
 ---
 
-## 二、技术指标分析
-
+## 二、传统技术指标分析
 ### 1. 移动平均线（MA）分析
-
-[分析MA5、MA10、MA20、MA60等均线系统，包括：]
-- 当前各均线数值
-- 均线排列形态（多头/空头）
-- 价格与均线的位置关系
-- 均线交叉信号
-
 ### 2. MACD指标分析
-
-[分析MACD指标，包括：]
-- DIF、DEA、MACD柱状图当前数值
-- 金叉/死叉信号
-- 背离现象
-- 趋势强度判断
-
 ### 3. RSI相对强弱指标
-
-[分析RSI指标，包括：]
-- RSI当前数值
-- 超买/超卖区域判断
-- 背离信号
-- 趋势确认
-
 ### 4. 布林带（BOLL）分析
 
-[分析布林带指标，包括：]
-- 上轨、中轨、下轨数值
-- 价格在布林带中的位置
-- 带宽变化趋势
-- 突破信号
+---
+
+## 三、趋势-情绪-时机量化分析（Trend-Emotion-Timing）
+### 1. 趋势得分（Trend-Score）
+基于多周期动量、均线、趋势信号，给出-1~1之间的趋势强度。
+
+### 2. 情绪指数（Emotion-Index）
+基于超买超卖、震荡指标，给出-1~1之间的情绪状态。
+
+### 3. 锚定趋势得分（Anchored Trend-Score）
+剔除短期情绪干扰后的中期真实趋势。
+
+### 4. 时机指标（Timing-Indicator）
+计算公式：锚定趋势得分 − 情绪指数
+- > 1.0 = 优质买入
+- < -1.0 = 优质卖出
+- 中间 = 观望
 
 ---
 
-## 三、价格趋势分析
-
+## 四、价格趋势分析
 ### 1. 短期趋势（5-10个交易日）
-
-[分析短期价格走势，包括支撑位、压力位、关键价格区间]
-
 ### 2. 中期趋势（20-60个交易日）
-
-[分析中期价格走势，结合均线系统判断趋势方向]
-
 ### 3. 成交量分析
 
-[分析成交量变化，量价配合情况]
-
 ---
 
-## 四、投资建议
-
+## 五、投资建议（基于时机指标）
 ### 1. 综合评估
-
-[基于上述技术指标，给出综合评估]
-
-### 2. 操作建议
-
-- **投资评级**：买入/持有/卖出
-- **目标价位**：[给出具体价格区间] {market_info['currency_symbol']}
-- **止损位**：[给出止损价格] {market_info['currency_symbol']}
-- **风险提示**：[列出主要风险因素]
-
-### 3. 关键价格区间
-
-- **支撑位**：[具体价格]
-- **压力位**：[具体价格]
-- **突破买入价**：[具体价格]
-- **跌破卖出价**：[具体价格]
+### 2. 操作建议（买入/持有/卖出）
+### 3. 关键价格区间（支撑位、压力位）
 
 ---
 
-**重要提醒：**
-- 必须严格按照上述格式输出，使用标准的Markdown标题（#、##、###）
-- 不要使用emoji符号（📊📈📉💭等）
-- 所有价格数据使用{market_info['currency_name']}（{market_info['currency_symbol']}）表示
-- 确保在分析中正确使用公司名称"{company_name}"和股票代码"{ticker}"
-- 报告标题必须是：# **{company_name}（{ticker}）技术分析报告**
-- 报告必须基于工具返回的真实数据进行分析
-- 包含具体的技术指标数值和专业分析
-- 提供明确的投资建议和风险提示
-- 报告长度不少于800字
-- 使用中文撰写
-- 使用表格展示数据时，确保格式规范"""
+**重要要求：**
+- 严格按格式输出
+- 数据真实、数值明确
+- 必须包含趋势、情绪、时机三部分分析
+- 使用中文，专业、简洁、可直接用于投资决策
+"""
 
-                    # 构建完整的消息序列
                     messages = state["messages"] + [result] + tool_messages + [HumanMessage(content=analysis_prompt)]
-
-                    # 生成最终分析报告
                     final_result = llm.invoke(messages)
                     report = final_result.content
 
                     logger.info(f"📊 [市场分析师] 生成完整分析报告，长度: {len(report)}")
 
-                    # 返回包含工具调用和最终分析的完整消息序列
-                    # 🔧 更新工具调用计数器
                     return {
                         "messages": [result] + tool_messages + [final_result],
                         "market_report": report,
@@ -486,18 +390,14 @@ def create_market_analyst(llm, toolkit):
                 except Exception as e:
                     logger.error(f"❌ [市场分析师] 工具执行或分析生成失败: {e}")
                     traceback.print_exc()
-
-                    # 降级处理：返回工具调用信息
                     report = f"市场分析师调用了工具但分析生成失败: {[call.get('name', 'unknown') for call in result.tool_calls]}"
 
-                    # 🔧 更新工具调用计数器
                     return {
                         "messages": [result],
                         "market_report": report,
                         "market_tool_call_count": tool_call_count + 1
                     }
 
-            # 🔧 更新工具调用计数器
             return {
                 "messages": [result],
                 "market_report": report,
