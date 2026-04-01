@@ -81,6 +81,9 @@ class Settings(BaseSettings):
             self._wechat_app_id = os.environ.get('WECHAT_APP_ID', '')
         return self._wechat_app_id
     
+    WECHAT_APP_SECRET: str= Field(default="", description="微信APP_SECRET，用于公众号/小程序接口调用") 
+    MCH_PRIVATE_KEY_PATH: str=Field(default="certs/apiclient_key.pem", description="微信商户私钥路径") 
+    
     @property
     def WECHAT_MCH_ID(self) -> str:
         """延迟加载微信商户号"""
@@ -126,13 +129,6 @@ class Settings(BaseSettings):
         if self._wechat_mch_serial_no is None:
             self._wechat_mch_serial_no = os.environ.get('WECHAT_MCH_SERIAL_NO')
         return self._wechat_mch_serial_no
-    
-    @property
-    def WECHAT_MCH_PRIVATE_KEY(self) -> Optional[str]:
-        """延迟加载微信商户私钥"""
-        if self._wechat_mch_private_key is None:
-            self._wechat_mch_private_key = os.environ.get('WECHAT_MCH_PRIVATE_KEY')
-        return self._wechat_mch_private_key
     
     def validate_wechat_config(self) -> tuple[bool, str]:
         """验证微信支付配置是否完整"""
@@ -392,7 +388,7 @@ class Settings(BaseSettings):
 
     # ===== 新闻数据同步服务配置 =====
     NEWS_SYNC_ENABLED: bool = Field(default=True)
-    NEWS_SYNC_CRON: str = Field(default="0 6,20 * * *")  # 每2小时
+    NEWS_SYNC_CRON: str = Field(default="0 6 * * *") #每天6点执行一次
     NEWS_SYNC_HOURS_BACK: int = Field(default=24)
     NEWS_SYNC_MAX_PER_SOURCE: int = Field(default=50)
 
