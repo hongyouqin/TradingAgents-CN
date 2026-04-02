@@ -227,7 +227,7 @@ class OrderService:
                 unified_order_params['scene_info'] = self._generate_h5_scene_info()
             
             # 调用微信统一下单
-            result = await wechat_pay_service.unified_order(**unified_order_params)
+            result = await wechat_pay_service.unified_order_v3(**unified_order_params)
             
             logger.info(f"📱 微信统一下单结果: {result}, openid={openid} 订单号: {order_no}, 支付类型: {order['trade_type']}")
             if result.get('return_code') != 'SUCCESS' or result.get('result_code') != 'SUCCESS':

@@ -126,6 +126,66 @@ class WeChatPayService:
     
     # ==================== 统一下单（APIv2） ====================
     
+    async def unified_order_v3(
+        self,
+        out_trade_no: str,
+        total_fee: int,
+        body: str,
+        trade_type: str,
+        openid: str = None,
+        spbill_create_ip: str = None,
+        scene_info: dict = None
+    ) -> Dict:
+        """
+        微信支付 V3 统一下单（通用版）
+        支持：JSAPI / NATIVE / MWEB
+        兼容老接口参数，直接替换即可
+        """
+        url = "https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi"
+        path = "/v3/pay/transactions/jsapi"
+
+        # 基础参数
+        data = {
+            "appid": self.app_id,
+            "mchid": self.mch_id,
+            "description": body,
+            "out_trade_no": out_trade_no,
+            "notify_url": self.notify_url,
+            "amount": {
+                "total": total_fee,
+                "currency": "CNY"
+            }
+        }
+
+        # 不同支付类型
+        if trade_type == "JSAPI":
+            data["payer"] = {"openid": openid}
+
+        elif trade_type == "NATIVE":
+            url = "https://api.mch.weixin.qq.com/v3/pay/transactions/native"
+            path = "/v3/pay/transactions/native"
+
+        elif trade_type == "MWEB":
+            url = "https://api.mch.weixin.qq.com/v3/pay/transactions/h5"
+            path = "/v3/pay/transactions/h5"
+            data["scene_info"] = {
+                "payer_client_ip": spbill_create_ip or "127.0.0.1"
+            }
+
+        # V3 请求头 + 发送请求
+        headers = self._build_v3_header("POST", path, data)
+        result = await self._post_json(url, data, headers)
+
+        # 统一格式化返回值（兼容老代码）
+        if trade_type == "JSAPI":
+            return {"prepay_id": result["prepay_id"]}
+        elif trade_type == "NATIVE":
+            return {"code_url": result["code_url"]}
+        elif trade_type == "MWEB":
+            return {"mweb_url": result["url"]}
+
+        return result
+    
     async def unified_order(
         self,
         out_trade_no: str,
