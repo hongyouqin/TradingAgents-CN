@@ -451,6 +451,9 @@ class OrderService:
                 else:
                     order['is_expired'] = False
                 
+                if order['is_expired']:
+                    order['status'] = 'EXPIRED'
+                
                 # 只返回需要的字段（新增支付场景）
                 orders.append({
                     'order_no': order['order_no'],
