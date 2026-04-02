@@ -87,7 +87,12 @@ class WeChatPayService:
         ts = str(int(time.time()))
         nonce = self._nonce()
         pkg = f"prepay_id={prepay_id}"
-        s = f"{self.app_id}\n{ts}\n{nonce}\n{prepay_id}\n"
+        
+        # 👇 把这一行改成下面这样！！！
+        # 错误：s = f"{self.app_id}\n{ts}\n{nonce}\n{prepay_id}\n"
+        # 正确：
+        s = f"{self.app_id}\n{ts}\n{nonce}\n{pkg}\n"
+
         sign = self._sign(s)
         return {
             "appId": self.app_id, "timeStamp": ts,
