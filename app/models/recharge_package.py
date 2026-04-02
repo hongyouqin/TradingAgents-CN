@@ -36,7 +36,7 @@ class RechargePackage(BaseModel):
         return round(self.price / self.total_power, 2)
 
 
-class RechargePackageCreate(BaseModel):
+class RechargePackageCreate(BaseModel): 
     """创建套餐请求"""
     package_id: str
     name: str

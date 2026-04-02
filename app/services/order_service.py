@@ -172,32 +172,31 @@ class OrderService:
         except Exception as e:
             logger.error(f"❌ 创建充值订单失败: {e}", exc_info=True)
             return None, str(e)
-        
+   
     async def prepare_recharge_payment(
         self, 
         user: Dict[str, Any], 
         order_no: str, 
         openid: str = None,
-        redirect_url: str = None  # 新增：H5支付完成后跳转地址
+        redirect_url: str = None  # H5支付完成后跳转地址
     ) -> Tuple[Optional[Dict], str]:
         """
-        准备充值支付（新增支持H5支付）
-        :param redirect_url: H5支付完成后跳转的前端地址（需备案）
+        准备充值支付（微信支付 V3 版本，支持 JSAPI / NATIVE / H5）
         """
         try:
-            # 查询订单
+            # 1. 查询订单
             order = self.orders_collection.find_one({
                 "order_no": order_no,
                 "user_id": str(user['id'])
             })
-            
+
             if not order:
                 return None, "充值订单不存在"
-            
+
             if order['status'] != 'PENDING':
                 return None, f"订单状态异常: {order['status']}"
-            
-            # 检查是否过期
+
+            # 2. 检查是否过期
             now_timestamp = self._current_timestamp()
             if now_timestamp > order['expired_timestamp']:
                 self.orders_collection.update_one(
@@ -210,66 +209,78 @@ class OrderService:
                     }
                 )
                 return None, "充值订单已过期"
-            
-            # 调用微信统一下单（兼容H5）
-            total_fee = int(order['price'] * 100)  # 元转分
-            unified_order_params = {
-                "out_trade_no": order_no,
-                "total_fee": total_fee,
-                "body": order.get('description', f"充值{order['total_power']}⚡")[:128],
-                "trade_type": order['trade_type'],
-                "openid": openid if order['trade_type'] == 'JSAPI' else None,
-                "spbill_create_ip": order['client_ip']
-            }
-            
-            # H5支付额外参数：scene_info（微信必填）
-            if order['trade_type'] == 'MWEB':
-                unified_order_params['scene_info'] = self._generate_h5_scene_info()
-            
-            # 调用微信统一下单
-            result = await wechat_pay_service.unified_order_v3(**unified_order_params)
-            
-            logger.info(f"📱 微信统一下单结果: {result}, openid={openid} 订单号: {order_no}, 支付类型: {order['trade_type']}")
-            if result.get('return_code') != 'SUCCESS' or result.get('result_code') != 'SUCCESS':
-                return None, f"微信支付下单失败: {result.get('return_msg')}"
-            
-            # 更新订单（新增mweb_url字段）
-            update_data = {
-                "updated_at": datetime.utcnow()
-            }
+
+            # 3. 支付参数
+            total_fee = int(order['price'] * 100)  # 元 → 分
+            description = order.get('description', f"充值{order['total_power']}⚡")[:128]
+            client_ip = order.get('client_ip', '127.0.0.1')
+            payment_scene = order.get('payment_scene') or order.get('trade_type') or 'JSAPI'
+
+            # 4. 微信支付 V3 统一下单
+            result = None
+            if payment_scene == "JSAPI":
+                if not openid:
+                    return None, "JSAPI支付必须传入 openid"
+                result = await wechat_pay_service.jsapi_order(
+                    openid=openid,
+                    out_trade_no=order_no,
+                    total_fee=total_fee,
+                    desc=description,
+                    ip=client_ip
+                )
+
+            elif payment_scene == "NATIVE":
+                result = await wechat_pay_service.native_order(
+                    out_trade_no=order_no,
+                    total_fee=total_fee,
+                    desc=description,
+                    ip=client_ip
+                )
+
+            elif payment_scene == "H5":
+                result = await wechat_pay_service.h5_order(
+                    out_trade_no=order_no,
+                    total_fee=total_fee,
+                    desc=description,
+                    ip=client_ip
+                )
+
+            # 5. 处理返回
             payment_params = {}
-            
-            if order['trade_type'] == 'JSAPI':
-                # JSAPI支付：生成调起参数
-                update_data['prepay_id'] = result.get('prepay_id')
-                payment_params = wechat_pay_service.generate_jsapi_params(result.get('prepay_id'))
-            elif order['trade_type'] == 'NATIVE':
-                # NATIVE支付：返回二维码地址
-                update_data['code_url'] = result.get('code_url')
-                payment_params = {'code_url': result.get('code_url')}
-            elif order['trade_type'] == 'MWEB':
-                # H5支付：返回跳转链接（拼接回跳地址）
-                mweb_url = result.get('mweb_url')
+            update_data = {"updated_at": datetime.utcnow()}
+
+            if payment_scene == "JSAPI":
+                prepay_id = result.get("prepay_id")
+                update_data["prepay_id"] = prepay_id
+                payment_params = wechat_pay_service.jsapi_params(prepay_id)
+
+            elif payment_scene == "NATIVE":
+                code_url = result.get("code_url")
+                update_data["code_url"] = code_url
+                payment_params = {"code_url": code_url}
+
+            elif payment_scene == "H5":
+                h5_url = result.get("h5_url")
                 if redirect_url:
-                    mweb_url += f"&redirect_url={redirect_url}"
-                update_data['mweb_url'] = mweb_url
+                    h5_url += f"&redirect_url={redirect_url}"
+                update_data["mweb_url"] = h5_url
                 payment_params = {
-                    'mweb_url': mweb_url,  # H5支付跳转链接
-                    'redirect_url': redirect_url  # 返回回跳地址
+                    "h5_url": h5_url,
+                    "redirect_url": redirect_url
                 }
-            
-            # 更新订单数据
+
+            # 6. 更新订单
             self.orders_collection.update_one(
                 {"order_no": order_no},
                 {"$set": update_data}
             )
-            
+
             return payment_params, ""
-            
+
         except Exception as e:
-            logger.error(f"❌ 准备充值支付失败: {e}", exc_info=True)
-            return None, str(e)
-    
+            logger.error(f"准备支付失败: {e}", exc_info=True)
+            return None, str(e)     
+   
     async def handle_recharge_success(
                 self, 
                 order_no: str, 
