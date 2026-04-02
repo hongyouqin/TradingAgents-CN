@@ -915,7 +915,7 @@ class SimpleAnalysisService:
                 )
             except Exception as tracker_err:
                 logger.error(f"❌ 创建进度跟踪器失败: {tracker_err}", exc_info=True)
-                # 进度跟踪器创建失败不中断核心分析流程
+                # 进度跟踪器创建失败不中断核心分析流程 
                 user_friendly_error = f"进度跟踪初始化失败: {str(tracker_err)[:100]}"
                 await self.memory_manager.update_task_status(
                     task_id=task_id,
@@ -1091,9 +1091,9 @@ class SimpleAnalysisService:
                     payload=NotificationCreate(
                         user_id=str(user_id),
                         type='analysis',
-                        title=f"{request.stock_code} 分析完成（含老板版）",
+                        title=f"{request.stock_code}股票分析完成",
                         content=summary,
-                        link=f"/stocks/{request.stock_code}",
+                        link=f"/reports/view/{request.stock_code}",
                         source='analysis'
                     )
                 )
