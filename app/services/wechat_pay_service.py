@@ -88,35 +88,27 @@ class WeChatPayService:
     
     def decrypt_resource(self, resource):
         """
-        微信支付 V3 回调资源解密（官方正确版）
+        微信支付 V3 回调资源解密（官方兼容版）
         """
         try:
-            # 1. 从回调 resource 中获取加密相关字段
-            ciphertext      = base64.b64decode(resource["ciphertext"])
-            nonce           = resource["nonce"].encode("utf-8")
+            key = self.api_v3_key.encode("utf-8")
+            nonce = resource["nonce"].encode("utf-8")
+            ciphertext = base64.b64decode(resource["ciphertext"])
             associated_data = resource["associated_data"].encode("utf-8")
 
-            # 2. 你的 APIv3 密钥（32字节）
-            key = self.api_v3_key.encode("utf-8")
+            # GCM 解密：拆分 认证标签 tag (16字节)
+            tag = ciphertext[-16:]
+            data = ciphertext[:-16]
 
-            # 3. AES-256-GCM 解密（必须传入 associated_data）
-            cipher = Cipher(
-                algorithms.AES(key),
-                modes.GCM(nonce),  # GCM 模式
-                backend=default_backend()
-            )
+            cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend())
             decryptor = cipher.decryptor()
-
-            # 👇 这里必须设置 associated_data！！！
             decryptor.authenticate_additional_data(associated_data)
-
-            # 4. 解密 + 校验
-            plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-
+            
+            plaintext = decryptor.update(data) + decryptor.finalize()
             return json.loads(plaintext.decode("utf-8"))
-
+        
         except Exception as e:
-            print(f"解密失败: {e}")
+            logger.error(f"解密失败: {str(e)}")
             raise Exception("回调解密失败")
 
     def jsapi_params(self, prepay_id):
