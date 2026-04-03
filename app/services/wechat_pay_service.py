@@ -9,6 +9,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+import base64
 from app.core.config import settings
 import logging
 
@@ -82,6 +85,39 @@ class WeChatPayService:
             "scene_info": {"payer_client_ip": ip, "h5_info": {"type": "Wap"}}
         }
         return await self._req("POST", "/v3/pay/transactions/h5", data)
+    
+    def decrypt_resource(self, resource):
+        """
+        微信支付 V3 回调资源解密（官方正确版）
+        """
+        try:
+            # 1. 从回调 resource 中获取加密相关字段
+            ciphertext      = base64.b64decode(resource["ciphertext"])
+            nonce           = resource["nonce"].encode("utf-8")
+            associated_data = resource["associated_data"].encode("utf-8")
+
+            # 2. 你的 APIv3 密钥（32字节）
+            key = self.api_v3_key.encode("utf-8")
+
+            # 3. AES-256-GCM 解密（必须传入 associated_data）
+            cipher = Cipher(
+                algorithms.AES(key),
+                modes.GCM(nonce),  # GCM 模式
+                backend=default_backend()
+            )
+            decryptor = cipher.decryptor()
+
+            # 👇 这里必须设置 associated_data！！！
+            decryptor.authenticate_additional_data(associated_data)
+
+            # 4. 解密 + 校验
+            plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+
+            return json.loads(plaintext.decode("utf-8"))
+
+        except Exception as e:
+            print(f"解密失败: {e}")
+            raise Exception("回调解密失败")
 
     def jsapi_params(self, prepay_id):
         ts = str(int(time.time()))

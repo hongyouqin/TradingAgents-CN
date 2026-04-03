@@ -1,7 +1,8 @@
 from decimal import Decimal
+import json
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
 from app.models.prepare_payment_request import PreparePaymentRequest
@@ -170,28 +171,81 @@ async def get_analysis_price():
         }
     }
 
-# ==================== 微信支付回调（已修复） ====================
+# ==================== 微信支付回调====================
+# v2版本
+# @router.post("/wxpay/notify")
+# async def wechat_pay_notify(request: Request):
+#     body = await request.body()
+#     xml_data = body.decode()
+
+#     success, data = wechat_pay_service.verify_notify(xml_data)
+#     if not success:
+#         return HTMLResponse('<xml><return_code>FAIL</return_code><return_msg>签名失败</return_msg></xml>')
+
+#     logger.info(f"微信支付回调成功: {data}")
+#     ok, msg = await order_service.handle_recharge_success(
+#         order_no=data["out_trade_no"],
+#         transaction_id=data["transaction_id"],
+#         paid_amount=int(data["total_fee"])
+#     )
+
+#     if ok:
+#         return HTMLResponse('<xml><return_code>SUCCESS</return_code><return_msg>OK</return_msg></xml>')
+#     else:
+#         logger.error(f"充值处理失败: {msg}")
+#         return HTMLResponse('<xml><return_code>FAIL</return_code><return_msg>处理失败</return_msg></xml>')
+    
+
+# v3版本回调（JSON格式）
+# ==================== 微信支付回调 V3（安全版：解密验证）====================
 @router.post("/wxpay/notify")
 async def wechat_pay_notify(request: Request):
-    body = await request.body()
-    xml_data = body.decode()
+    try:
+        raw_body = await request.body()
+        raw_str = raw_body.decode("utf-8")
+        data = json.loads(raw_str)
 
-    success, data = wechat_pay_service.verify_notify(xml_data)
-    if not success:
-        return HTMLResponse('<xml><return_code>FAIL</return_code><return_msg>签名失败</return_msg></xml>')
+        # ==============================================
+        # 🔑 核心安全验证：用 APIv3 密钥解密（无法伪造）
+        # ==============================================
+        resource = data.get("resource")
+        if not resource:
+            logger.error("回调无resource字段，非法请求")
+            return Response(content='{"code":"FAIL"}', media_type="application/json")
 
-    logger.info(f"微信支付回调成功: {data}")
-    ok, msg = await order_service.handle_recharge_success(
-        order_no=data["out_trade_no"],
-        transaction_id=data["transaction_id"],
-        paid_amount=int(data["total_fee"])
-    )
+        # 解密（只有微信 + 你能解开）
+        try:
+            resource_data = wechat_pay_service.decrypt_resource(resource)
+        except Exception as e:
+            logger.error(f"解密失败 → 非微信官方回调：{e}")
+            return Response(content='{"code":"FAIL"}', media_type="application/json")
 
-    if ok:
-        return HTMLResponse('<xml><return_code>SUCCESS</return_code><return_msg>OK</return_msg></xml>')
-    else:
-        logger.error(f"充值处理失败: {msg}")
-        return HTMLResponse('<xml><return_code>FAIL</return_code><return_msg>处理失败</return_msg></xml>')
+        # 解密成功 = 100% 是真的微信回调
+        logger.info(f"✅ 安全验证通过（解密成功）| 订单：{resource_data['out_trade_no']}")
+
+        # 业务数据
+        out_trade_no = resource_data["out_trade_no"]
+        transaction_id = resource_data["transaction_id"]
+        total_fee = resource_data["amount"]["total"]
+
+        logger.info(F"充值业务数据: out_trade_no={out_trade_no} transaction_id={transaction_id} total_fee={total_fee}")
+        # 处理订单
+        ok, msg = await order_service.handle_recharge_success(
+            order_no=out_trade_no,
+            transaction_id=transaction_id,
+            paid_amount=total_fee
+        )
+
+        if ok:
+            return Response(content='{"code":"SUCCESS","message":"OK"}', media_type="application/json")
+        else:
+            logger.error(f"订单处理失败：{msg}")
+            return Response(content='{"code":"FAIL"}', media_type="application/json")
+
+    except Exception as e:
+        logger.error(f"回调异常：{e}", exc_info=True)
+        return Response(content='{"code":"FAIL"}', media_type="application/json")
+
 
 # ==================== 微信授权 ====================
 @router.get("/wechat/callback")
