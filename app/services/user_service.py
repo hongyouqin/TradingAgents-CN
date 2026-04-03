@@ -64,18 +64,21 @@ class UserService:
         检查是否需要邀请码才能注册
         可以从系统配置中读取
         """
-        try:
-            # 从数据库配置表读取
-            config_collection = self.db.system_config
-            config = config_collection.find_one({"key": "require_invite_code"})
-            if config:
-                return config.get("value", False)
+        # 不需要强制用户填写邀请码，如果有话，可以奖励
+        return False        
+        
+        # try:
+        #     # 从数据库配置表读取
+        #     config_collection = self.db.system_config
+        #     config = config_collection.find_one({"key": "require_invite_code"})
+        #     if config:
+        #         return config.get("value", False)
             
-            return True
+        #     return True
             
-        except Exception as e:
-            logger.error(f"❌ 检查邀请码要求失败: {e}")
-            return False
+        # except Exception as e:
+        #     logger.error(f"❌ 检查邀请码要求失败: {e}")
+        #     return False
         
  
     async def create_user(self, user_data: UserCreate) -> Optional[User]:
@@ -230,15 +233,15 @@ class UserService:
                     return None, RegistrationError.USERNAME_ALREADY_EXISTS, error_msg
                 logger.info(f"✅ 用户名可用: {username}")
             
-            # ========== 5. 检查邮箱是否已存在 ==========
-            if email:
-                logger.info(f"🔍 检查邮箱是否已存在: {email}")
-                existing_email = self.users_collection.find_one({"email": email})
-                if existing_email:
-                    error_msg = "邮箱已被使用"
-                    logger.warning(f"❌ {error_msg}: {email}")
-                    return None, RegistrationError.EMAIL_ALREADY_EXISTS, error_msg
-                logger.info(f"✅ 邮箱可用: {email}")
+            # # ========== 5. 检查邮箱是否已存在 ==========
+            # if email:
+            #     logger.info(f"🔍 检查邮箱是否已存在: {email}")
+            #     existing_email = self.users_collection.find_one({"email": email})
+            #     if existing_email:
+            #         error_msg = "邮箱已被使用"
+            #         logger.warning(f"❌ {error_msg}: {email}")
+            #         return None, RegistrationError.EMAIL_ALREADY_EXISTS, error_msg
+            #     logger.info(f"✅ 邮箱可用: {email}")
             
             # ========== 6. 自动生成用户名 ==========
             if not username:

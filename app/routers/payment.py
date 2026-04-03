@@ -214,10 +214,10 @@ async def wechat_pay_notify(request: Request):
             return Response(content='{"code":"FAIL"}', media_type="application/json")
 
         logger.info(f"收到微信支付回调，开始安全验证... resource={resource}")
-        # 解密（只有微信 + 你能解开）
+        # 解密
         try:
             resource_data = wechat_pay_service.decrypt_resource(resource)
-        except Exception as e:
+        except Exception as e:                                             
             logger.error(f"解密失败 → 非微信官方回调：{e}")
             return Response(content='{"code":"FAIL"}', media_type="application/json")
 
