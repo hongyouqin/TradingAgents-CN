@@ -213,6 +213,7 @@ async def wechat_pay_notify(request: Request):
             logger.error("回调无resource字段，非法请求")
             return Response(content='{"code":"FAIL"}', media_type="application/json")
 
+        logger.info(f"收到微信支付回调，开始安全验证... resource={resource}")
         # 解密（只有微信 + 你能解开）
         try:
             resource_data = wechat_pay_service.decrypt_resource(resource)
