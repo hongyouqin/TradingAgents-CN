@@ -103,9 +103,10 @@ class User(BaseModel):
     """用户模型"""
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     username: str = Field(..., min_length=3, max_length=50)
-    email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
+    # email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
+    email: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')
-    openid :str = Field(None, description="微信openid")
+    openid: Optional[str] = Field(None, description="微信openid")
     hashed_password: str
     is_active: bool = True
     is_verified: bool = False

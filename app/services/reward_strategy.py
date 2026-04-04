@@ -7,7 +7,7 @@ class RewardStrategy:
     """奖励策略"""
     
     # 新用户注册奖励（给新用户自己）
-    NEW_USER_REWARD = 5  # 新用户注册送5算力
+    NEW_USER_REWARD = 20  # 新用户注册送5算力
     
     # 邀请奖励（给邀请人）
     INVITE_REWARD = 10  # 邀请人获得10算力

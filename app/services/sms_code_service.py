@@ -105,7 +105,7 @@ class SMSCodeService:
                        f"过期时间: {datetime.utcfromtimestamp(expires_at_timestamp)}")
             
             # 发送短信
-            await self.send_sms(phone, code)
+            # await self.send_sms(phone, code)
             
             # 返回验证码和过期时间戳
             return code, expires_at_timestamp
