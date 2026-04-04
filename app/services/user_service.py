@@ -463,7 +463,7 @@ class UserService:
             #     return False, "该手机号已注册"
             
             # 3. 生成并发送验证码
-            code = await self.sms_service.create_sms_code(
+            code, _ = await self.sms_service.create_sms_code(
                 phone=phone,
                 code_type="register",
                 expires_in=300  # 5分钟有效期
@@ -593,9 +593,9 @@ class UserService:
                 return False, "该手机号未注册"
             
             # 2. 生成并发送验证码
-            code = await self.sms_service.create_sms_code(
+            code, _ = await self.sms_service.create_sms_code(
                 phone=phone,
-                code_type="login",
+                code_type="register",
                 expires_in=300  # 5分钟有效期
             )
             
@@ -628,10 +628,10 @@ class UserService:
                 return False, "该手机号未注册"
             
             # 2. 生成并发送验证码
-            code = await self.sms_service.create_sms_code(
-                phone=phone,
-                code_type="reset_password",
-                expires_in=300  # 5分钟有效期
+            code, _ = await self.sms_service.create_sms_code(
+                    phone=phone,
+                    code_type="register",
+                    expires_in=300  # 5分钟有效期
             )
             
             if not code:
