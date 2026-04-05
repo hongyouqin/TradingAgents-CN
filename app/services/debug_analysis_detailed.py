@@ -121,17 +121,17 @@ async def test_direct():
             market_type="A股",
             analysis_date=datetime.now(),
             research_depth="标准",
-            selected_analysts=["market", "fundamentals"],
+            selected_analysts=["market", "fundamentals", "news"],
             include_sentiment=True,
             include_risk=True,
             language="zh-CN",
-            quick_analysis_model="deepseek-v3.2",
-            deep_analysis_model="deepseek-v3.2"
+            quick_analysis_model="deepseek-reasoner",
+            deep_analysis_model="deepseek-reasoner"
         )
         
         request = SingleAnalysisRequest(
-            symbol="600338",
-            stock_code="600338",
+            symbol="603538",
+            stock_code="603538",
             parameters=parameters
         )
         logger.info(f"✅ 请求创建成功: symbol={request.symbol}")

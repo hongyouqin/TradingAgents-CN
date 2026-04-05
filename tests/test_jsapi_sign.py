@@ -49,7 +49,73 @@ def test_sign():
         print(pay_sign)
         
     except Exception as e:
-        print(f"签名失败: {e}")    
+        print(f"签名失败: {e}")
+        
+def payment_verify_singature():
+    '''
+        支付验证签名
+    '''    
+    import base64
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    # ======================
+    # 你 最 新 的 真 实 数 据 ✅
+    # ======================
+    app_id = "wx183521434338da29"
+    timestamp = "1775148110"
+    nonce_str = "8WoH9XB6vphDcItIgVkX5sjL5Xip0QX1"
+    prepay_id = "wx0300415143942227deceb7510f5f600000"
+
+    # 你最新返回的签名
+    my_pay_sign = "Gb6z1t0hY9VvmU4obiLeXK2REDZCD/UCgmekkhq+2pOA0YnBL1dvkbxgTIPXIqBVfKS7Vh2dnWR7H2IxIoijsM0p5rLMgajfFSvpYaGmR0uAkYQNRGdSvIn11egKS/ZxGeoV1gFgqOrnyP6lSXJoUukUhx+lXw6M7lM7VLhBa+atZ/lEoJSiGmnop241ECiyfN7T/2mdpCtN56suYYiwYsUtrkaL4HikEp1oj7juze6w02Iuv7HXzcwc595nif7Reih8vicSYcKp0hSCdss6RALgpP2POB3zxCM/hZP3Lk/ATXFBNtmVGXZG+1R5k5OlW8FYITMAZWhnPvMOj0A//Q=="
+
+    # 你的私钥路径
+    private_key_path = "./certs/apiclient_key.pem"
+
+    # ======================
+    # 开始验签
+    # ======================
+    try:
+        # 1. 构造微信要求的签名串（必须严格这个格式！）
+        signature_str = f"{app_id}\n{timestamp}\n{nonce_str}\nprepay_id={prepay_id}\n"
+
+        print("🔒 签名原文：")
+        print(repr(signature_str))
+        print("-" * 60)
+
+        # 2. 加载私钥
+        with open(private_key_path, 'r', encoding='utf-8') as f:
+            private_key_data = f.read()
+
+        private_key = serialization.load_pem_private_key(
+            private_key_data.encode('utf-8'),
+            password=None
+        )
+
+        # 3. 重新计算签名
+        signature = private_key.sign(
+            signature_str.encode('utf-8'),
+            padding.PKCS1v15(),
+            hashes.SHA256()
+        )
+        generated_sign = base64.b64encode(signature).decode('utf-8')
+
+        print("✅ 重新计算的签名：")
+        print(generated_sign)
+        print("-" * 60)
+        print("✅ 你接口返回的签名：")
+        print(my_pay_sign)
+        print("-" * 60)
+
+        # 4. 比对
+        if generated_sign == my_pay_sign:
+            print("🎉 恭喜！签名 **完全正确**！前端可以正常调起！")
+        else:
+            print("❌ 签名错误！")
+
+    except Exception as e:
+        print(f"❌ 验签失败：{e}")
 
 # 寻找证书对应的序列号
 def test_match():
