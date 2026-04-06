@@ -150,7 +150,7 @@ class UserService:
             # 1. 通过 code 获取 openid + access_token
             wx_res = await wechat_pay_service.get_openid_by_code(code)
             openid = wx_res.get("openid")
-            access_token = wx_res.get("access_token")  # 👈 这个是关键！
+            access_token = wx_res.get("access_token")
 
             if not openid or not access_token:
                 errmsg = wx_res.get("errmsg", "获取微信信息失败")
@@ -182,11 +182,11 @@ class UserService:
 
             user_doc = {
                 "username": username,
-                "nickname": nickname,       # 👈 真实微信昵称
-                "avatar": avatar,           # 👈 真实微信头像
-                "sex" : sex,
-                "city" : city,
-                "province" : province,
+                "nickname": nickname,
+                "avatar": avatar,
+                "sex": sex,
+                "city": city,
+                "province": province,
                 "email": None,
                 "phone": None,
                 "openid": openid,
@@ -236,9 +236,18 @@ class UserService:
                 "new_user_reward_granted": False
             }
 
+            # ==============================================
+            # ✅ 先校验，通过再入库（修复报错还插库）
+            # ==============================================
+            try:
+                user_obj = User(**user_doc)
+            except Exception as e:
+                logger.error(f"❌ 用户模型校验失败: {e}")
+                return None, RegistrationError.UNKNOWN_ERROR, "用户数据格式错误"
+
+            # 校验通过才插入数据库
             result = self.users_collection.insert_one(user_doc)
             user_doc["_id"] = result.inserted_id
-            user_obj = User(**user_doc)
 
             # 发放新用户奖励
             try:
@@ -251,8 +260,8 @@ class UserService:
                         {"$set": {"new_user_reward_granted": True}}
                     )
                     logger.info(f"🎁 新用户注册奖励发放成功: {reward_msg}")
-            except:
-                logger.warning(f"⚠️ 新用户注册奖励发放失败: {reward_msg}")
+            except Exception as e:
+                logger.warning(f"⚠️ 新用户注册奖励发放失败: {e}")
 
             return User(**user_doc), None, None
 
