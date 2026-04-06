@@ -103,6 +103,9 @@ class User(BaseModel):
     """用户模型"""
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     username: str = Field(..., min_length=3, max_length=50)
+    nickname: Optional[str] = None
+    avatar: Optional[str] = None
+    wechat_verified: Optional[bool] = False
     # email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
     email: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')
@@ -167,6 +170,7 @@ class RegistrationError(str, Enum):
     UNKNOWN_ERROR = "unknown_error"
     INVITE_CODE_INVALID = "invite_code_invalid"
     INVITE_CODE_REQUIRED = "invite_code_required"
+    INVALID_PARAMS = "invalid_params"
 
 
 

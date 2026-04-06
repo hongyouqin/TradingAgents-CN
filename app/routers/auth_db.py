@@ -594,6 +594,62 @@ async def register_by_phone(
             }
         )
 
+
+# ====================== 微信公众号登录（对标你原 login 接口） ======================
+@router.post("/wechat/login")
+async def wechat_official_login(
+    code: str,
+    request: Request
+):
+    ip_address = request.client.host if request.client else "unknown"
+    logger.info(f"🌍 微信公众号登录请求: code={code[:10]}..., IP={ip_address}")
+
+    try:
+        if not code:
+            raise HTTPException(status_code=400, detail="code 不能为空")
+
+        # 1. 微信登录/注册（你已经有的最终版函数）
+        user, err_type, err_msg = await user_service.wechat_auth_login(code)
+
+        if not user:
+            logger.warning(f"❌ 微信登录失败: {err_msg}")
+            raise HTTPException(status_code=401, detail="微信授权登录失败")
+
+        # 2. 检查用户状态（和你原逻辑一样）
+        if not user.is_active:
+            logger.warning(f"❌ 微信登录失败 - 用户已禁用: {user.username}")
+            raise HTTPException(status_code=403, detail="用户已被禁用")
+
+        # ====================== 【关键】完全按你原逻辑生成 token ======================
+        token = AuthService.create_access_token(sub=user.username)
+        refresh_token = AuthService.create_refresh_token(sub=user.username)
+
+        # ====================== 返回格式 100% 对齐你的原接口 ======================
+        return {
+            "success": True,
+            "data": {
+                "access_token": token,
+                "refresh_token": refresh_token,
+                "expires_in": 60 * 60,  # 1小时
+                "user": {
+                    "id": str(user.id),
+                    "username": user.username,
+                    "email": user.email,
+                    "phone": user.phone if hasattr(user, 'phone') else "",
+                    "name": user.username,
+                    "is_admin": user.is_admin,
+                    "is_verified": user.is_verified
+                }
+            },
+            "message": "微信登录成功"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 微信登录异常: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="微信登录服务异常")
+    
 @router.post("/reset-password-by-phone")
 async def reset_password_by_phone(request: ResetPasswordByPhoneRequest):
     '''
