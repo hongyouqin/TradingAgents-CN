@@ -258,6 +258,7 @@ class UserService:
             # 校验通过才插入数据库
             result = self.users_collection.insert_one(user_doc)
             user_doc["_id"] = result.inserted_id
+            user_obj.id = str(result.inserted_id)
 
             # 发放新用户奖励
             try:
