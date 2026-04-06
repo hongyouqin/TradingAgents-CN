@@ -7,7 +7,7 @@ from datetime import datetime
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, validator
 
@@ -605,6 +605,8 @@ async def wechat_login(
 ):
     ip_address = request.client.host if request.client else "unknown"
     logger.info(f"🌍 微信公众号登录请求: code={code[:10]}..., IP={ip_address}")
+    
+    time.sleep(3)
 
     try:
         if not code:
