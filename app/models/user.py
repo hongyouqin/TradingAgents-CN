@@ -105,7 +105,9 @@ class User(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     nickname: Optional[str] = None
     avatar: Optional[str] = None
-    wechat_verified: Optional[bool] = False
+    sex: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
     # email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
     email: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')

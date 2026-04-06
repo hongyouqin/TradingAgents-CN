@@ -146,39 +146,50 @@ class UserService:
             return None
         
     async def wechat_auth_login(self, code: str) -> Tuple[Optional[User], Optional[str], Optional[str]]:
-        """
-        微信公众号授权登录（公众号网页授权）
-        前端传 code → 换取 openid → 自动登录/注册
-        """
         try:
-            # 1. 通过 code 换取 openid
+            # 1. 通过 code 获取 openid + access_token
             wx_res = await wechat_pay_service.get_openid_by_code(code)
             openid = wx_res.get("openid")
+            access_token = wx_res.get("access_token")  # 👈 这个是关键！
 
-            if not openid:
-                errmsg = wx_res.get("errmsg", "获取微信openid失败")
+            if not openid or not access_token:
+                errmsg = wx_res.get("errmsg", "获取微信信息失败")
                 return None, RegistrationError.INVALID_PARAMS, errmsg
 
-            # 2. 查询是否已有该微信用户
+            # 2. 【核心】获取真实微信用户信息：昵称、头像、性别、地区
+            user_info = await wechat_pay_service.get_wechat_user_info(access_token, openid)
+            nickname = user_info.get("nickname", f"微信用户_{openid[-8:]}")
+            avatar = user_info.get("headimgurl", "")
+            sex = user_info.get("sex", 0)
+            city = user_info.get("city", "")
+            province = user_info.get("province", "")
+
+            logger.info(f"✅ 获取微信用户信息成功: {nickname}, openid={openid}")
+
+            # 3. 查询用户是否已存在
             user_doc = self.users_collection.find_one({"openid": openid})
             if user_doc:
-                # 更新登录时间
                 self.users_collection.update_one(
                     {"_id": user_doc["_id"]},
                     {"$set": {"last_login": datetime.utcnow()}}
                 )
                 return User(**user_doc), None, None
 
-            # 3. 新用户自动注册（公众号专用）
+            # 4. 自动注册（写入真实微信资料）
             username = f"wx_{openid[-8:]}"
             while self.users_collection.find_one({"username": username}):
-                username = f"wx_{openid[-8:]}_{int(time.time()) % 10000}"
+                username = f"wx_{openid[-8:]}_{int(time.time() % 10000)}"
 
             user_doc = {
                 "username": username,
-                "email": "",
-                "phone": "",
-                "openid": openid,  # 只存这个
+                "nickname": nickname,       # 👈 真实微信昵称
+                "avatar": avatar,           # 👈 真实微信头像
+                "sex" : sex,
+                "city" : city,
+                "province" : province,
+                "email": None,
+                "phone": None,
+                "openid": openid,
                 "hashed_password": "",
                 "is_active": True,
                 "is_verified": True,
@@ -189,8 +200,6 @@ class UserService:
                 "phone_verified": False,
                 "email_verified": False,
                 "register_type": "wechat",
-
-                # 你的原有固定结构
                 "preferences": {
                     "default_market": "A股",
                     "default_depth": "3",
@@ -212,34 +221,43 @@ class UserService:
                 "total_analyses": 0,
                 "successful_analyses": 0,
                 "failed_analyses": 0,
-                "favorite_stocks": []
+                "favorite_stocks": [],
+                "invited_by": None,
+                "invited_code": None,
+                "invited_at": None,
+                "is_invite_reward_granted": False,
+                "invite_rewards": {},
+                "power_balance": 0,
+                "power_history": [],
+                "register_ip": None,
+                "register_device_id": None,
+                "daily_invite_count": 0,
+                "last_invite_date": None,
+                "new_user_reward_granted": False
             }
 
             result = self.users_collection.insert_one(user_doc)
             user_doc["_id"] = result.inserted_id
-            logger.info(f"✅ 公众号新用户注册成功: {username} openid={openid[:12]}...")
-            # 创建 User 对象
-            user_obj = User(**user_doc)    
-            # ========== 9. 发放新用户注册奖励 ==========
-            from app.services.invite_reward_service import InviteRewardService
-            reward_service = InviteRewardService(self.db)
-                
-            reward_success, reward_msg = await reward_service.grant_new_user_reward(user_obj)
-            if reward_success:
-                logger.info(f"🎁 新用户注册奖励发放成功: {reward_msg}")
-                # 更新用户标记
-                self.users_collection.update_one(
-                    {"_id": result.inserted_id},
-                    {"$set": {"new_user_reward_granted": True}}
-                )
-            else:
-                logger.warning(f"⚠️ 新用户注册奖励发放失败: {reward_msg}")      
-            
-            
+            user_obj = User(**user_doc)
+
+            # 发放新用户奖励
+            try:
+                from app.services.invite_reward_service import InviteRewardService
+                reward_service = InviteRewardService(self.db)
+                reward_success, reward_msg = await reward_service.grant_new_user_reward(user_obj)
+                if reward_success:
+                    self.users_collection.update_one(
+                        {"_id": result.inserted_id},
+                        {"$set": {"new_user_reward_granted": True}}
+                    )
+                    logger.info(f"🎁 新用户注册奖励发放成功: {reward_msg}")
+            except:
+                logger.warning(f"⚠️ 新用户注册奖励发放失败: {reward_msg}")
+
             return User(**user_doc), None, None
 
         except Exception as e:
-            logger.error(f"❌ 公众号登录失败: {e}")
+            logger.error(f"❌ 公众号登录失败: {e}", exc_info=True)
             return None, RegistrationError.UNKNOWN_ERROR, "公众号登录异常"
 
 

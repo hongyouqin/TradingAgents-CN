@@ -86,6 +86,17 @@ class WeChatPayService:
             self.token_expire = now + 7000
             return self.access_token
         raise Exception(f"获取access_token失败: {data}")
+    
+    async def get_wechat_user_info(self, access_token: str, openid: str):
+        url = "https://api.weixin.qq.com/sns/userinfo"
+        params = {
+            "access_token": access_token,
+            "openid": openid,
+            "lang": "zh_CN"
+        }
+        async with httpx.AsyncClient() as c:
+            r = await c.get(url, params=params)
+        return r.json()
 
     async def get_jsapi_ticket(self):
         """获取 JSAPI ticket"""
