@@ -600,8 +600,8 @@ async def register_by_phone(
 @router.post("/wechat/login")
 async def wechat_login(
     code: str,
-    url: str,  # 新增：前端传当前页面 URL
-    request: Request
+    request: Request,
+    url: str = None,  # 改成可选，不传也不报错
 ):
     ip_address = request.client.host if request.client else "unknown"
     logger.info(f"🌍 微信公众号登录请求: code={code[:10]}..., IP={ip_address}")
@@ -610,7 +610,7 @@ async def wechat_login(
         if not code:
             raise HTTPException(status_code=400, detail="code 不能为空")
 
-        # 1. 微信登录/注册
+        # 1. 微信登录（核心逻辑，一定执行）
         user, err_type, err_msg = await user_service.wechat_auth_login(code)
 
         if not user:
@@ -622,14 +622,23 @@ async def wechat_login(
             logger.warning(f"❌ 微信登录失败 - 用户已禁用: {user.username}")
             raise HTTPException(status_code=403, detail="用户已被禁用")
 
-        # 3. 生成 token
+        # 3. 生成 TOKEN（一定成功）
         token = AuthService.create_access_token(sub=user.username)
-        refresh_token = AuthService.create_refresh_token(sub=user.username)
+        refresh_token = AuthService.create_access_token(sub=user.username, expires_delta=60*60*24*7)
 
-        # ====================== 新增：获取 JS-SDK 配置 ======================
-        wx_config = await wechat_pay_service.get_js_config(url)
+        # ====================== 安全获取 wx_config（就算失败也不影响登录） ======================
+        wx_config = None
+        if url:
+            try:
+                wx_config = await wechat_pay_service.get_js_config(url)
+                logger.info("✅ JS-SDK配置获取成功")
+            except Exception as e:
+                # 重点：这里只打警告，不抛错，不影响登录！
+                logger.warning(f"⚠️ JS-SDK配置获取失败（可忽略）: {e}")
 
-        # ====================== 返回（完全对齐你原来结构） ======================
+        # ======================================================================================
+
+        # 永远成功返回！
         return {
             "success": True,
             "data": {
@@ -645,8 +654,7 @@ async def wechat_login(
                     "is_admin": user.is_admin,
                     "is_verified": user.is_verified
                 },
-                # 👇 直接加在这里，不破坏原有结构
-                "wx_config": wx_config  
+                "wx_config": wx_config  # 有就返回，没有就null
             },
             "message": "微信登录成功"
         }
