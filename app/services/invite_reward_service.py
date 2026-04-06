@@ -57,7 +57,7 @@ class InviteRewardService:
                 user=user,
                 order_no=order_no,
                 amount=reward_amount,
-                description=f"新用户注册奖励获得 {reward_amount} 算力",
+                desc=f"新用户注册奖励获得 {reward_amount} 算力",
                 metadata={
                     "reward_type": "new_user_reward",
                     "invite_code": None
