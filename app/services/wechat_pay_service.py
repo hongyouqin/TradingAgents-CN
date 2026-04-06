@@ -4,6 +4,7 @@ import string
 import json
 import base64
 import httpx
+import hashlib
 from typing import Dict, Any
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -11,7 +12,6 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
-import base64
 from app.core.config import settings
 import logging
 
@@ -28,6 +28,12 @@ class WeChatPayService:
 
         with open(settings.MCH_PRIVATE_KEY_PATH, 'r', encoding='utf-8') as f:
             self.private_key = load_pem_private_key(f.read().encode(), password=None)
+
+        # JS-SDK 缓存
+        self.access_token = None
+        self.jsapi_ticket = None
+        self.token_expire = 0
+        self.ticket_expire = 0
 
     def _nonce(self):
         return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
@@ -51,9 +57,79 @@ class WeChatPayService:
             "Authorization": self._auth(method, path, body),
             "Content-Type": "application/json"
         }
+        async with httpx.AsyncClient() as client:
+            response = await client.request(method, self.api_base + path, content=body.encode(), headers=headers)
+        return response.json()
+
+    # ===========================================================================
+    # 🟢 【新增】JS-SDK 核心方法：获取 wx.config 配置
+    # ===========================================================================
+    async def get_access_token(self):
+        """获取公众号全局 access_token（非支付）"""
+        now = time.time()
+        if self.access_token and now < self.token_expire:
+            return self.access_token
+
+        url = "https://api.weixin.qq.com/cgi-bin/token"
+        params = {
+            "grant_type": "client_credential",
+            "appid": self.app_id,
+            "secret": settings.WECHAT_APP_SECRET
+        }
+
         async with httpx.AsyncClient() as c:
-            r = await c.request(method, self.api_base + path, content=body.encode(), headers=headers)
-        return r.json()
+            r = await c.get(url, params=params)
+            data = r.json()
+
+        if "access_token" in data:
+            self.access_token = data["access_token"]
+            self.token_expire = now + 7000
+            return self.access_token
+        raise Exception(f"获取access_token失败: {data}")
+
+    async def get_jsapi_ticket(self):
+        """获取 JSAPI ticket"""
+        now = time.time()
+        if self.jsapi_ticket and now < self.ticket_expire:
+            return self.jsapi_ticket
+
+        token = await self.get_access_token()
+        url = "https://api.weixin.qq.com/cgi-bin/ticket/getticket"
+        params = {"access_token": token, "type": "jsapi"}
+ 
+        async with httpx.AsyncClient() as c:
+            r = await c.get(url, params=params)
+            data = r.json()
+
+        if data.get("errcode") == 0:
+            self.jsapi_ticket = data["ticket"]
+            self.ticket_expire = now + 7000
+            return self.jsapi_ticket
+        raise Exception(f"获取jsapi_ticket失败: {data}")
+
+    async def get_js_config(self, url: str) -> dict:
+        """
+        前端 JS-SDK 初始化需要的配置
+        返回 appId, timestamp, nonceStr, signature
+        """
+        ticket = await self.get_jsapi_ticket()
+        nonceStr = self._nonce()
+        timestamp = str(int(time.time()))
+
+        # 微信签名规则
+        sign_str = f"jsapi_ticket={ticket}&noncestr={nonceStr}&timestamp={timestamp}&url={url}"
+        signature = hashlib.sha1(sign_str.encode()).hexdigest()
+
+        return {
+            "appId": self.app_id,
+            "timestamp": timestamp,
+            "nonceStr": nonceStr,
+            "signature": signature
+        }
+
+    # ===========================================================================
+    # 以下是你原来的所有代码，完全不动
+    # ===========================================================================
 
     async def jsapi_order(self, openid, out_trade_no, total_fee, desc, ip):
         data = {
@@ -85,7 +161,7 @@ class WeChatPayService:
             "scene_info": {"payer_client_ip": ip, "h5_info": {"type": "Wap"}}
         }
         return await self._req("POST", "/v3/pay/transactions/h5", data)
-    
+
     def decrypt_resource(self, resource):
         """
         微信支付 V3 回调资源解密（官方兼容版）

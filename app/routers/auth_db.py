@@ -21,6 +21,7 @@ import re
 from typing import Dict, Any
 
 from app.utils.utils import get_real_client_ip
+from app.services.wechat_pay_service import wechat_pay_service
 
 
 
@@ -595,10 +596,11 @@ async def register_by_phone(
         )
 
 
-# ====================== 微信公众号登录（对标你原 login 接口） ======================
+# ====================== 微信公众号登录======================
 @router.post("/wechat/login")
-async def wechat_official_login(
+async def wechat_login(
     code: str,
+    url: str,  # 新增：前端传当前页面 URL
     request: Request
 ):
     ip_address = request.client.host if request.client else "unknown"
@@ -608,29 +610,32 @@ async def wechat_official_login(
         if not code:
             raise HTTPException(status_code=400, detail="code 不能为空")
 
-        # 1. 微信登录/注册（你已经有的最终版函数）
+        # 1. 微信登录/注册
         user, err_type, err_msg = await user_service.wechat_auth_login(code)
 
         if not user:
             logger.warning(f"❌ 微信登录失败: {err_msg}")
             raise HTTPException(status_code=401, detail="微信授权登录失败")
 
-        # 2. 检查用户状态（和你原逻辑一样）
+        # 2. 检查用户状态
         if not user.is_active:
             logger.warning(f"❌ 微信登录失败 - 用户已禁用: {user.username}")
             raise HTTPException(status_code=403, detail="用户已被禁用")
 
-        # ====================== 【关键】完全按你原逻辑生成 token ======================
+        # 3. 生成 token
         token = AuthService.create_access_token(sub=user.username)
         refresh_token = AuthService.create_refresh_token(sub=user.username)
 
-        # ====================== 返回格式 100% 对齐你的原接口 ======================
+        # ====================== 新增：获取 JS-SDK 配置 ======================
+        wx_config = await wechat_pay_service.get_js_config(url)
+
+        # ====================== 返回（完全对齐你原来结构） ======================
         return {
             "success": True,
             "data": {
                 "access_token": token,
                 "refresh_token": refresh_token,
-                "expires_in": 60 * 60,  # 1小时
+                "expires_in": 60 * 60,
                 "user": {
                     "id": str(user.id),
                     "username": user.username,
@@ -639,7 +644,9 @@ async def wechat_official_login(
                     "name": user.username,
                     "is_admin": user.is_admin,
                     "is_verified": user.is_verified
-                }
+                },
+                # 👇 直接加在这里，不破坏原有结构
+                "wx_config": wx_config  
             },
             "message": "微信登录成功"
         }
