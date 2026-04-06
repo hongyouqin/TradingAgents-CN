@@ -199,11 +199,9 @@ class PowerAccountService:
             return account_doc
 
         except errors.DuplicateKeyError:
-            # 并发冲突：重试获取
             logger.warning(f"⚠️ 账户并发冲突，重试获取: {user.username}")
             time.sleep(0.05)
             return self._get_or_create_account_sync(user)
-
         except Exception as e:
             logger.error(f"❌ 获取/创建账户失败: {e}", exc_info=True)
             return None
@@ -228,7 +226,6 @@ class PowerAccountService:
         if not account:
             return False, "账户不存在或用户无效"
 
-        # 幂等校验
         existing = self.transactions_collection.find_one({"order_no": order_no})
         if existing:
             if existing.get('status') == 'CONFIRMED':
@@ -240,7 +237,6 @@ class PowerAccountService:
         current_balance = account['balance']
         clean_meta = self._clean_decimal_in_dict(metadata or {})
 
-        # 1. 创建待处理流水
         tx = {
             "_id": ObjectId(),
             "account_id": str(account['_id']),
@@ -263,7 +259,6 @@ class PowerAccountService:
         except errors.DuplicateKeyError:
             return True, "订单已存在"
 
-        # 2. 乐观锁更新余额
         for retry in range(3):
             try:
                 current = self.accounts_collection.find_one({"_id": account['_id']})
@@ -320,7 +315,7 @@ class PowerAccountService:
             return False, "恢复失败"
 
     # ------------------------------ 消费 ------------------------------
-    def _consume_sync(self, user: User, order_no: str, amount: Decimal, desc: str='', meta: Dict=None) -> Tuple[bool, str]:
+    def _consume_sync(self, user: User, order_no: str, amount: Decimal, description: str='', metadata: Dict=None) -> Tuple[bool, str]:
         try:
             if amount <= 0:
                 return False, "金额必须大于0"
@@ -339,7 +334,7 @@ class PowerAccountService:
                 return False, "余额不足"
 
             amt_128 = self._decimal_to_128(amount)
-            clean_meta = self._clean_decimal_in_dict(meta or {})
+            clean_meta = self._clean_decimal_in_dict(metadata or {})
             tx = {
                 "_id": ObjectId(),
                 "account_id": str(account['_id']),
@@ -351,7 +346,7 @@ class PowerAccountService:
                 "before_balance": self._decimal_to_128(account['balance']),
                 "after_balance": None,
                 "status": "PENDING",
-                "description": desc,
+                "description": description,
                 "metadata": clean_meta,
                 "created_at": datetime.utcnow(),
                 "completed_at": None
@@ -391,7 +386,6 @@ class PowerAccountService:
 
     # ------------------------------ 余额查询 ------------------------------
     def _get_balance_sync(self, user: User) -> Dict[str, Decimal]:
-        """查询余额：会自动验证用户真实存在"""
         account = self._get_or_create_account_sync(user)
         if not account:
             z = Decimal('0')
@@ -426,17 +420,21 @@ class PowerAccountService:
     # ------------------------------ 对外异步接口 ------------------------------
     async def get_or_create_account(self, user: User):
         return await asyncio.to_thread(self._get_or_create_account_sync, user)
-    async def recharge(self, user: User, order_no: str, amount: Decimal, desc='', meta=None):
-        return await asyncio.to_thread(self._recharge_sync, user, order_no, amount, desc, meta)
-    async def consume(self, user: User, order_no: str, amount: Decimal, desc='', meta=None):
-        return await asyncio.to_thread(self._consume_sync, user, order_no, amount, desc, meta)
+
+    async def recharge(self, user: User, order_no: str, amount: Decimal, description='', metadata=None):
+        return await asyncio.to_thread(self._recharge_sync, user, order_no, amount, description, metadata)
+
+    async def consume(self, user: User, order_no: str, amount: Decimal, description='', metadata=None):
+        return await asyncio.to_thread(self._consume_sync, user, order_no, amount, description, metadata)
+
     async def get_balance(self, user: User):
         return await asyncio.to_thread(self._get_balance_sync, user)
+
     async def get_transactions(self, user: User, limit=50, status=None, t_type=None):
         return await asyncio.to_thread(self._get_transactions_sync, user, limit, status, t_type)
 
     # ------------------------------ 冻结/解冻/确认消费 ------------------------------
-    def _freeze_sync(self, user: User, order_no: str, amount: Decimal, desc='', meta=None) -> Tuple[bool, str]:
+    def _freeze_sync(self, user: User, order_no: str, amount: Decimal, description='', metadata=None) -> Tuple[bool, str]:
         try:
             if amount <=0: return False, "金额必须大于0"
             account = self._get_or_create_account_sync(user)
@@ -458,7 +456,7 @@ class PowerAccountService:
                 "_id": ObjectId(), "account_id": str(account['_id']), "user_id": str(user.id),
                 "username": user.username, "order_no": order_no, "transaction_type": "FREEZE",
                 "amount": amt128, "before_balance": self._decimal_to_128(account['balance']),
-                "status": "FROZEN", "description": desc, "metadata": self._clean_decimal_in_dict(meta or {}),
+                "status": "FROZEN", "description": description, "metadata": self._clean_decimal_in_dict(metadata or {}),
                 "created_at": datetime.utcnow()
             }
             try:
@@ -498,10 +496,12 @@ class PowerAccountService:
         self.transactions_collection.update_one({"_id":tx['_id']},{"$set":{"status":"CANCELLED","completed_at":datetime.utcnow()}})
         return True, "已解冻"
 
-    async def freeze(self, user: User, order_no: str, amount: Decimal, desc='', meta=None):
-        return await asyncio.to_thread(self._freeze_sync, user, order_no, amount, desc, meta)
+    async def freeze(self, user: User, order_no: str, amount: Decimal, description='', metadata=None):
+        return await asyncio.to_thread(self._freeze_sync, user, order_no, amount, description, metadata)
+
     async def confirm_consume(self, order_no: str):
         return await asyncio.to_thread(self._confirm_consume_sync, order_no)
+
     async def cancel_consume(self, order_no: str, reason=''):
         return await asyncio.to_thread(self._cancel_consume_sync, order_no, reason)
 
@@ -514,6 +514,7 @@ class PowerAccountService:
             }).limit(100))
         except:
             return []
+
     def _compensate_expired_sync(self, tx):
         try:
             order_no = tx['order_no']
@@ -529,8 +530,10 @@ class PowerAccountService:
             return True,"成功"
         except:
             return False,"失败"
+
     async def get_expired_frozen_transactions(self, minutes=30):
         return await asyncio.to_thread(self._get_expired_frozen_sync, minutes)
+
     async def compensate_expired_freeze(self, tx):
         return await asyncio.to_thread(self._compensate_expired_sync, tx)
 

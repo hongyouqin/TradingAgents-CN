@@ -154,7 +154,9 @@ class UserService:
         except Exception as e:
             logger.error(f"❌ 创建用户失败: {e}")
             return None
-        
+    
+    
+    
     async def wechat_auth_login(self, code: str) -> Tuple[Optional[User], Optional[str], Optional[str]]:
         try:
             # 1. 通过 code 获取 openid + access_token
@@ -183,6 +185,7 @@ class UserService:
                     {"_id": user_doc["_id"]},
                     {"$set": {"last_login": datetime.utcnow()}}
                 )
+                logger.info(f"✅ 微信用户登录成功: {nickname}, openid={openid}")
                 return User(**user_doc), None, None
 
             # 4. 自动注册（写入真实微信资料）
