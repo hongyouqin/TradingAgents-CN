@@ -264,6 +264,7 @@ class UserService:
             try:
                 from app.services.invite_reward_service import InviteRewardService
                 reward_service = InviteRewardService(self.db)
+                logger.info(f"🎁 新用户注册用户信息: {user_obj}")
                 reward_success, reward_msg = await reward_service.grant_new_user_reward(user_obj)
                 if reward_success:
                     self.users_collection.update_one(
