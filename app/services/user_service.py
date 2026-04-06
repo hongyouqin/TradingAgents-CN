@@ -38,6 +38,12 @@ class UserService:
         self.sms_service = SMSCodeService()
         self.invite_manager = InviteCodeManager(self.db) 
         self.anti_fraud = AntiFraudService(self.db)
+        
+        self._create_indexes()
+        
+        
+    def _create_indexes(self):
+        self.users_collection.create_index("openid", unique=True)
 
     def close(self):
         """关闭数据库连接"""
