@@ -43,7 +43,11 @@ class UserService:
         
         
     def _create_indexes(self):
-        self.users_collection.create_index("openid", unique=True)
+        self.users_collection.create_index(
+            "openid",
+            unique=True,
+            sparse=True  # 👈 关键！只索引存在 openid 字段的数据
+        )
 
     def close(self):
         """关闭数据库连接"""
