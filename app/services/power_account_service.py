@@ -23,10 +23,7 @@ logger = get_logger('power_account_service')
 '''
     适配单节点MongoDB（无事务）+ 异步FastAPI + Decimal序列化
     核心：先记录后更新 + 乐观锁 + 唯一索引 + 幂等性校验 保障数据一致性
-'''
-class PowerAccountService:
-    '''
-    ┌─────────────────────────────────────────────────────────────┐
+        ┌─────────────────────────────────────────────────────────────┐
     │                      用户服务 (已有)                          │
     │  ┌─────────────┐                                            │
     │  │   User      │  username, email, phone, is_active...      │
@@ -81,8 +78,11 @@ class PowerAccountService:
     │ transaction_id  │
     │ ...             │
     └─────────────────┘  
-    '''
-    
+'''
+
+
+
+class PowerAccountService:
     def __init__(self):
         self.client = MongoClient(settings.MONGO_URI)
         self.db = self.client[settings.MONGO_DB]
@@ -144,16 +144,9 @@ class PowerAccountService:
                 result[k] = v
         return result
 
-    # ==========================================================================
-    # 🔥 🔥 🔥 【核心修复】获取/创建账户：先校验用户真实存在
-    # ==========================================================================
     def _get_or_create_account_sync(self, user: User) -> Optional[Dict[str, Any]]:
         try:
             user_id_str = str(user.id)
-
-            # ==============================================
-            # 🔥 【终极修复】第一步：验证用户真实存在于用户表
-            # ==============================================
             if not ObjectId.is_valid(user_id_str):
                 logger.error(f"❌ 无效的用户ID: {user_id_str}")
                 return None
@@ -163,7 +156,6 @@ class PowerAccountService:
                 logger.error(f"❌ 用户不存在于用户表，禁止创建账户: {user_id_str}")
                 return None
 
-            # 第二步：查询现有账户
             account = self.accounts_collection.find_one({"user_id": user_id_str})
             if account:
                 account['balance'] = self._decimal_from_128(account['balance'])
@@ -173,7 +165,6 @@ class PowerAccountService:
                 logger.info(f"✅ 获取账户: {user.username}({user_id_str})")
                 return account
 
-            # 第三步：创建新账户（唯一索引保证不会重复）
             now = datetime.utcnow()
             zero = Decimal('0.00')
             account_doc = {
@@ -360,7 +351,7 @@ class PowerAccountService:
             res = self.accounts_collection.find_one_and_update(
                 {"user_id": str(user.id), "balance": {"$gte": amt_128}, "version": account['version']},
                 {
-                    "$inc": {"balance": -amt_128, "total_consumed": amt_128, "version": 1},
+                    "$inc": {"balance": self._decimal_to_128(-amount), "total_consumed": amt_128, "version": 1},
                     "$set": {"updated_at": datetime.utcnow()}
                 },
                 return_document=True
@@ -471,11 +462,21 @@ class PowerAccountService:
     def _confirm_consume_sync(self, order_no: str) -> Tuple[bool, str]:
         tx = self.transactions_collection.find_one({"order_no":order_no,"status":"FROZEN","transaction_type":"FREEZE"})
         if not tx: return False, "无冻结记录"
+        
+        # 🔥 修复：先转 Decimal，再取负，再转回 Decimal128
         amt = self._decimal_from_128(tx['amount'])
-        amt128 = self._decimal_to_128(amt)
+        amt_neg_128 = self._decimal_to_128(-amt)
+        
         res = self.accounts_collection.find_one_and_update(
-            {"_id": ObjectId(tx['account_id']), "frozen_amount": {"$gte": amt128}, "balance": {"$gte": amt128}},
-            {"$inc": {"balance":-amt128, "frozen_amount":-amt128, "total_consumed":amt128, "version":1}},
+            {"_id": ObjectId(tx['account_id']), "frozen_amount": {"$gte": tx['amount']}, "balance": {"$gte": tx['amount']}},
+            {
+                "$inc": {
+                    "balance": amt_neg_128,
+                    "frozen_amount": amt_neg_128,
+                    "total_consumed": tx['amount'],
+                    "version": 1
+                }
+            },
             return_document=True
         )
         if not res: return False, "确认失败"
@@ -485,11 +486,14 @@ class PowerAccountService:
     def _cancel_consume_sync(self, order_no: str, reason='') -> Tuple[bool, str]:
         tx = self.transactions_collection.find_one({"order_no":order_no,"status":"FROZEN"})
         if not tx: return False, "无记录"
+        
+        # 🔥 修复：先转 Decimal，再取负，再转回 Decimal128
         amt = self._decimal_from_128(tx['amount'])
-        amt128 = self._decimal_to_128(amt)
+        amt_neg_128 = self._decimal_to_128(-amt)
+        
         res = self.accounts_collection.find_one_and_update(
-            {"_id": ObjectId(tx['account_id']), "frozen_amount": {"$gte": amt128}},
-            {"$inc": {"frozen_amount": -amt128, "version":1}},
+            {"_id": ObjectId(tx['account_id']), "frozen_amount": {"$gte": tx['amount']}},
+            {"$inc": {"frozen_amount": amt_neg_128, "version":1}},
             return_document=True
         )
         if not res: return False, "解冻失败"
@@ -517,19 +521,20 @@ class PowerAccountService:
 
     def _compensate_expired_sync(self, tx):
         try:
-            order_no = tx['order_no']
             amt = self._decimal_from_128(tx['amount'])
-            amt128 = self._decimal_to_128(amt)
+            amt_neg_128 = self._decimal_to_128(-amt)
+            
             res = self.accounts_collection.find_one_and_update(
-                {"_id":ObjectId(tx['account_id']), "frozen_amount":{"$gte":amt128}},
-                {"$inc":{"frozen_amount":-amt128,"version":1}}
+                {"_id": ObjectId(tx['account_id']), "frozen_amount": {"$gte": tx['amount']}},
+                {"$inc": {"frozen_amount": amt_neg_128, "version": 1}}
             )
-            if not res: return False,"失败"
-            self.transactions_collection.update_one({"_id":tx['_id']},{"$set":{"status":"EXPIRED","completed_at":datetime.utcnow()}})
-            logger.info(f"✅ 过期解冻: {order_no}")
-            return True,"成功"
-        except:
-            return False,"失败"
+            if not res: return False, "失败"
+            self.transactions_collection.update_one({"_id": tx['_id']}, {"$set": {"status": "EXPIRED", "completed_at": datetime.utcnow()}})
+            logger.info(f"✅ 过期解冻: {tx['order_no']}")
+            return True, "成功"
+        except Exception as e:
+            logger.error(f"❌ 过期补偿失败: {e}")
+            return False, "失败"
 
     async def get_expired_frozen_transactions(self, minutes=30):
         return await asyncio.to_thread(self._get_expired_frozen_sync, minutes)
@@ -538,3 +543,5 @@ class PowerAccountService:
         return await asyncio.to_thread(self._compensate_expired_sync, tx)
 
 power_account_service = PowerAccountService()
+
+
