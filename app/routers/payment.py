@@ -167,7 +167,7 @@ async def get_analysis_price():
         "unit": "⚡",
         "types": {
             "standard": {"name": "standard", "label": "标准分析", "price": 1.5, "description": "快速常规报告"},
-            "deep": {"name": "deep", "label": "深度推理", "price": 1.8, "description": "深度复杂分析"}
+            "deep": {"name": "deep", "label": "深度推理", "price": 1.98, "description": "深度复杂分析"}
         }
     }
 
