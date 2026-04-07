@@ -59,7 +59,7 @@ class CompensationService:
         try:
             # 获取过期的冻结记录
             expired_transactions = await power_account_service.get_expired_frozen_transactions(
-                timeout_minutes=30  # 30分钟未确认的冻结记录
+                minutes=30  # 30分钟未确认的冻结记录
             )
             
             if not expired_transactions:
