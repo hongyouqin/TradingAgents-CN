@@ -11,7 +11,7 @@ import tushare as ts
 # ==============================================
 # Tushare 配置（请替换为你的 token）
 # ==============================================
-TUSHARE_TOKEN = "d55fd8e3f434d49dd06b4b17502b07a983bc850253242fc92fd17e06"  # 在 https://tushare.pro 注册获取
+TUSHARE_TOKEN = "xxxxx"  # 在 https://tushare.pro 注册获取
 ts.set_token(TUSHARE_TOKEN)
 pro = ts.pro_api()
 
