@@ -5,11 +5,14 @@
 """
 
 import os
+from pathlib import Path
 import sys
 
+
 # 添加项目根目录到Python路径
-project_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, project_root)
+# project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 
 def test_fundamentals_analyst_prompt():
     """测试基本面分析师的提示词优化效果"""
@@ -165,20 +168,20 @@ def test_market_analyst_prompt():
     
     try:
         # 检查API密钥
-        api_key = os.getenv("DASHSCOPE_API_KEY")
+        api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
-            print("⚠️ 未找到DASHSCOPE_API_KEY，跳过LLM测试")
+            print("⚠️ 未找到DEEPSEEK_API_KEY，跳过LLM测试")
             return True
         
         print(f"🔧 创建市场分析师...")
         
         # 创建LLM和工具包
-        from tradingagents.llm_adapters import ChatDashScopeOpenAI
         from tradingagents.agents.utils.agent_utils import Toolkit
+        from tradingagents.llm_adapters.deepseek_adapter import ChatDeepSeek
         from tradingagents.default_config import DEFAULT_CONFIG
         
-        llm = ChatDashScopeOpenAI(
-            model="qwen-turbo",
+        llm = ChatDeepSeek(
+            model="deepseek-chat",
             temperature=0.1,
             max_tokens=1500
         )

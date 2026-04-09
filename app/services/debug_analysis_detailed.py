@@ -121,7 +121,7 @@ async def test_direct():
             market_type="A股",
             analysis_date=datetime.now(),
             research_depth="标准",
-            selected_analysts=["market", "fundamentals", "news"],
+            selected_analysts=["market", "fundamentals"],
             include_sentiment=True,
             include_risk=True,
             language="zh-CN",

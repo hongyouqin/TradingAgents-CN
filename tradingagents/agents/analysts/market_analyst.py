@@ -119,7 +119,15 @@ def create_market_analyst(llm, toolkit):
         tet_analysis_section = ""
         try:
             # 调用你已经封装好的函数
-            tet_result = toolkit.calculate_tet_indicators(ticker, start_date_5y, current_date)
+             # 1. 从 toolkit 里正确取出工具（和你现有代码完全一样）
+            tet_tool = toolkit.calculate_tet_indicators
+
+            # 2. 使用 .invoke() 调用（LangChain Tool 唯一正确方式）
+            tet_result = tet_tool.invoke({
+                "stock_code": ticker,
+                "start_date": start_date_5y,
+                "end_date": current_date
+            })
             if tet_result and isinstance(tet_result, dict):
                 # 成功：直接展示精准指标
                 tet_analysis_section = f"""
@@ -131,6 +139,7 @@ def create_market_analyst(llm, toolkit):
         ### 👉 操作建议: {tet_result['action']}
         """
                 logger.info("✅ TET 指标计算成功，已注入报告")
+                logger.info(f"tet_result = {tet_result}")
             else:
                 # 失败：给模型完整规则
                 tet_analysis_section = """
