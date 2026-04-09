@@ -97,25 +97,80 @@ def _get_company_name(ticker: str, market_info: dict) -> str:
 def create_market_analyst(llm, toolkit):
 
     def market_analyst_node(state):
-        logger.debug(f"📈 [DEBUG] ===== 市场分析师节点开始 =====")
-
         # 工具调用计数器
         tool_call_count = state.get("market_tool_call_count", 0)
         max_tool_calls = 3
-        logger.info(f"🔧 [死循环修复] 当前工具调用次数: {tool_call_count}/{max_tool_calls}")
+        logger.info(f"🔧 市场分析师节点开始 [死循环修复] 当前工具调用次数: {tool_call_count}/{max_tool_calls}")
 
         current_date = state["trade_date"]
         ticker = state["company_of_interest"]
 
         # ====================== 自动计算 3 年前日期（Trend-Emotion-Timing 必须）======================
         current_date_dt = datetime.strptime(current_date, "%Y-%m-%d")
-        start_date_3y = (current_date_dt - relativedelta(years=3)).strftime("%Y-%m-%d")
-        logger.info(f"📅 [3年数据] 开始日期: {start_date_3y} | 结束日期: {current_date}")
+        start_date_5y = (current_date_dt - relativedelta(years=5)).strftime("%Y-%m-%d")
+        logger.info(f"📅 [5年数据] 开始日期: {start_date_5y} | 结束日期: {current_date}")
 
         # 根据股票代码格式选择数据源
         from tradingagents.utils.stock_utils import StockUtils
         market_info = StockUtils.get_market_info(ticker)
         company_name = _get_company_name(ticker, market_info)
+
+        # ====================== ✅ 优先计算 TET 指标（失败则自动兜底）======================
+        tet_analysis_section = ""
+        try:
+            # 调用你已经封装好的函数
+            tet_result = toolkit.calculate_tet_indicators(ticker, start_date_5y, current_date)
+            if tet_result and isinstance(tet_result, dict):
+                # 成功：直接展示精准指标
+                tet_analysis_section = f"""
+        ## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）【精准计算】
+        ### 1. 趋势得分（Trend-Score）: {tet_result['trend_score']}
+        ### 2. 情绪指数（Emotion-Index）: {tet_result['emotion_index']}
+        ### 3. 锚定趋势得分（Anchored Trend-Score）: {tet_result['anchored_trend_score']}
+        ### 4. 时机指标（Timing-Indicator）: {tet_result['timing_indicator']}
+        ### 👉 操作建议: {tet_result['action']}
+        """
+                logger.info("✅ TET 指标计算成功，已注入报告")
+            else:
+                # 失败：给模型完整规则
+                tet_analysis_section = """
+        ## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）【AI分析】
+        ### 1. 趋势得分（Trend-Score）
+        基于多周期价格动量、均线、交叉信号，给出-1到1之间的趋势得分，判断趋势强弱。
+
+        ### 2. 情绪指数（Emotion-Index）
+        基于震荡指标与超买超卖，给出-1到1之间的情绪指数，判断市场情绪状态。
+
+        ### 3. 锚定趋势得分（Anchored Trend-Score）
+        剔除短期情绪干扰后的真实中期趋势。
+
+        ### 4. 时机指标（Timing-Indicator）
+        公式：锚定趋势得分 − 情绪指数，用于判断最佳买卖时机
+        - 时机指标 > 1.0：优质买入时机
+        - 时机指标 < -1.0：优质卖出时机
+        - 介于-1.0 ~ 1.0：观望
+        """
+                logger.warning("⚠️ TET 指标未计算成功，将由大模型按规则自动分析")
+        except Exception as e:
+            # 异常：同样给规则
+            tet_analysis_section = """
+        ## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）【AI分析】
+        ### 1. 趋势得分（Trend-Score）
+        基于多周期价格动量、均线、交叉信号，给出-1到1之间的趋势得分，判断趋势强弱。
+
+        ### 2. 情绪指数（Emotion-Index）
+        基于震荡指标与超买超卖，给出-1到1之间的情绪指数，判断市场情绪状态。
+
+        ### 3. 锚定趋势得分（Anchored Trend-Score）
+        剔除短期情绪干扰后的真实中期趋势。
+
+        ### 4. 时机指标（Timing-Indicator）
+        公式：锚定趋势得分 − 情绪指数，用于判断最佳买卖时机
+        - 时机指标 > 1.0：优质买入时机
+        - 时机指标 < -1.0：优质卖出时机
+        - 介于-1.0 ~ 1.0：观望
+        """
+            logger.warning(f"⚠️ TET 计算异常，大模型按规则兜底: {str(e)[:80]}")
 
         # 统一工具
         logger.info(f"📊 [市场分析师] 使用统一市场数据工具，自动识别股票类型")
@@ -150,7 +205,7 @@ def create_market_analyst(llm, toolkit):
                     "⚠️ 重要工作流程：\n"
                     "1. 如果消息历史中没有工具结果，立即调用 get_stock_market_data_unified 工具\n"
                     "   - ticker: {ticker}\n"
-                    "   - start_date: {start_date_3y}\n"
+                    "   - start_date: {start_date_5y}\n"
                     "   - end_date: {current_date}\n"
                     "   注意：必须获取 3 年全部日频K线数据，用于趋势-情绪-时机分析\n"
                     "2. 如果消息历史中已经有工具结果（ToolMessage），立即基于工具数据生成最终分析报告\n"
@@ -167,21 +222,7 @@ def create_market_analyst(llm, toolkit):
                     "## 📈 传统技术指标分析\n"
                     "[分析移动平均线、MACD、RSI、布林带等]\n"
                     "\n"
-                    "## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）\n"
-                    "### 1. 趋势得分（Trend-Score）\n"
-                    "[基于多周期价格动量、均线、交叉信号，给出-1到1之间的趋势得分，判断趋势强弱]\n"
-                    "\n"
-                    "### 2. 情绪指数（Emotion-Index）\n"
-                    "[基于震荡指标与超买超卖，给出-1到1之间的情绪指数，判断市场情绪状态]\n"
-                    "\n"
-                    "### 3. 锚定趋势得分（Anchored Trend-Score）\n"
-                    "[剔除短期情绪干扰后的真实中期趋势]\n"
-                    "\n"
-                    "### 4. 时机指标（Timing-Indicator）\n"
-                    "[公式：锚定趋势得分 − 情绪指数，用于判断最佳买卖时机]\n"
-                    "- 时机指标 > 1.0：优质买入时机\n"
-                    "- 时机指标 < -1.0：优质卖出时机\n"
-                    "- 介于-1.0 ~ 1.0：观望\n"
+                    "{tet_section}\n"
                     "\n"
                     "## 📉 价格趋势分析\n"
                     "[结合趋势-情绪-时机框架，分析短期、中期趋势]\n"
@@ -214,18 +255,19 @@ def create_market_analyst(llm, toolkit):
 
         prompt = prompt.partial(tool_names=", ".join(tool_names))
         prompt = prompt.partial(current_date=current_date)
-        prompt = prompt.partial(start_date_3y=start_date_3y)
+        prompt = prompt.partial(start_date_5y=start_date_5y)
         prompt = prompt.partial(ticker=ticker)
         prompt = prompt.partial(company_name=company_name)
         prompt = prompt.partial(market_name=market_info['market_name'])
         prompt = prompt.partial(currency_name=market_info['currency_name'])
         prompt = prompt.partial(currency_symbol=market_info['currency_symbol'])
+        prompt = prompt.partial(tet_section=tet_analysis_section)
 
         logger.info(f"📊 [市场分析师] LLM类型: {llm.__class__.__name__}")
         logger.info(f"📊 [市场分析师] LLM模型: {getattr(llm, 'model_name', 'unknown')}")
         logger.info(f"📊 [市场分析师] 公司名称: {company_name}")
         logger.info(f"📊 [市场分析师] 股票代码: {ticker}")
-        logger.info(f"📊 [市场分析师] 3年起始日期自动设置: {start_date_3y}")
+        logger.info(f"📊 [市场分析师] 5年起始日期自动设置: {start_date_5y}")
 
         chain = prompt | llm.bind_tools(tools)
 
@@ -336,21 +378,7 @@ def create_market_analyst(llm, toolkit):
 
 ---
 
-## 三、趋势-情绪-时机量化分析（Trend-Emotion-Timing）
-### 1. 趋势得分（Trend-Score）
-基于多周期动量、均线、趋势信号，给出-1~1之间的趋势强度。
-
-### 2. 情绪指数（Emotion-Index）
-基于超买超卖、震荡指标，给出-1~1之间的情绪状态。
-
-### 3. 锚定趋势得分（Anchored Trend-Score）
-剔除短期情绪干扰后的中期真实趋势。
-
-### 4. 时机指标（Timing-Indicator）
-计算公式：锚定趋势得分 − 情绪指数
-- > 1.0 = 优质买入
-- < -1.0 = 优质卖出
-- 中间 = 观望
+{tet_analysis_section}
 
 ---
 

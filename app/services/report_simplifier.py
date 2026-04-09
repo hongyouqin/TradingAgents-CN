@@ -187,11 +187,18 @@ class ReportSimplifier:
     5. 包含以下所有内容：
     - 深度洞察和决策结果 (insight_and_decision)
     - 核心回顾 (core_review：基本面、新闻面、技术面、情绪面)
-    ✅ 技术面必须突出展示：
-    - Trend-Score 趋势得分
-    - Emotion-Index 情绪指数
-    - Anchored Trend-Score 锚定趋势得分
-    - Timing-Indicator 时机指标
+
+    ✅ 【手机端优化】Trend-Emotion-Timing 指标区域要求：
+    - 使用 **2×2 网格布局（两行两列）**
+    - 电脑端：4个指标并排一行
+    - 手机端：自动变成两行，每行两个（不换行、不拉伸）
+    - 每个指标小卡片：小圆角、浅蓝背景、文字居中、紧凑排版
+    必须包含这4项：
+    1. Trend-Score 趋势得分
+    2. Emotion-Index 情绪指数
+    3. Anchored Trend-Score 锚定趋势得分
+    4. Timing-Indicator 时机指标
+
     - 个人看法与风险警示 (personal_view_and_risk)
     - 炒作点分析 (炒作点分析)
     - 短期展望 (short_term_outlook)
@@ -201,7 +208,7 @@ class ReportSimplifier:
 
     6. 只返回完整的HTML代码，不要任何解释
     7. 确保代码完整，包含<!DOCTYPE html>
-    8. 适配手机端，使用viewport
+    8. 适配手机端，使用viewport，禁止横向滚动
     9. 保持简洁专业，不要过于复杂
 
     **颜色规范**：
@@ -211,7 +218,7 @@ class ReportSimplifier:
     - 核心词汇加粗：橙色（#f59e0b）或深蓝色（#1e40af）
     - 风险警示：红色（#ef4444）或橙色（#f97316）
     - 金句区域：浅色背景（如 #f8fafc），深蓝色文字
-    - Trend-Emotion-Timing 指标用深蓝色/橙色高亮突出显示
+    - TET指标小卡片：浅蓝色背景 #eff6ff，深蓝色文字 #1e40af
 
     直接输出HTML代码："""
 

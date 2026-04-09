@@ -20,6 +20,7 @@ from tradingagents.utils.tool_logging import log_tool_call, log_analysis_step
 
 # 导入日志模块
 from tradingagents.utils.logging_manager import get_logger
+from tradingagents.utils.trend_emotion_timing import ATrendEmotionTiming
 logger = get_logger('agents')
 
 
@@ -1037,6 +1038,66 @@ class Toolkit:
             error_msg = f"统一基本面分析工具执行失败: {str(e)}"
             logger.error(f"❌ [统一基本面工具] {error_msg}")
             return error_msg
+
+
+
+    # ============================
+    # 新增：趋势-情绪-时机计算（Tushare）
+    # ============================
+    @staticmethod
+    @tool
+    @log_tool_call(tool_name="get_stock_market_data_unified", log_args=True)
+    def calculate_tet_indicators(stock_code: str, start_date: str, end_date: str):
+        """
+        计算 Trend-Emotion-Timing 四大指标
+        返回 趋势得分、情绪指数、锚定趋势、时机指标
+        """
+        try:
+
+            import tushare as ts
+            env_token = os.getenv('TUSHARE_TOKEN')
+            if env_token:
+                api_key = env_token.strip().strip('"').strip("'")
+            else:
+                return None
+            ts.set_token(api_key)
+            pro = ts.pro_api()
+            # 日期格式转换 YYYY-MM-DD → YYYYMMDD
+            start_date_fmt = start_date.replace("-", "")
+            end_date_fmt = end_date.replace("-", "")
+
+            # 获取数据
+            def get_stock_df(stock_code, start_date, end_date):
+                if '.' not in stock_code:
+                    ts_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+                else:
+                    ts_code = stock_code
+                df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date, fields='trade_date,open,high,low,close,vol')
+                df = df.sort_values('trade_date').reset_index(drop=True)
+                df['trade_date'] = pd.to_datetime(df['trade_date'])
+                return df
+
+            def get_hs300_df(start_date, end_date):
+                df = pro.index_daily(ts_code='000300.SH', start_date=start_date, end_date=end_date, fields='trade_date,close')
+                df = df.sort_values('trade_date').reset_index(drop=True)
+                df['trade_date'] = pd.to_datetime(df['trade_date'])
+                return df
+
+            stock_df = get_stock_df(stock_code, start_date_fmt, end_date_fmt)
+            hs300_df = get_hs300_df(start_date_fmt, end_date_fmt)
+
+            tet = ATrendEmotionTiming(stock_code)
+            tet.load_data(stock_df, hs300_df)
+            tet.calculate_trend_score()
+            tet.calculate_emotion_index()
+            tet.calculate_anchored_trend()
+            tet.calculate_timing()
+
+            return tet.get_latest()
+
+        except Exception as e:
+            logger.error(f"❌ TET 指标计算失败: {e}")
+            return None  
 
     @staticmethod
     @tool
