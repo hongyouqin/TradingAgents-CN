@@ -9,7 +9,7 @@ from app.services.user_service import user_service
 from app.services.reward_strategy import RewardStrategy
 from app.services.power_account_service import power_account_service
 
-router = APIRouter(prefix="/invite", tags=["邀请奖励"])
+router = APIRouter(prefix="/invite", tags=["传统邀请码"])
 logger = logging.getLogger(__name__)
 
 

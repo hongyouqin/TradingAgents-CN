@@ -595,7 +595,6 @@ async def register_by_phone(
             }
         )
 
-
 # ====================== 微信公众号登录======================
 @router.post("/wechat/login")
 async def wechat_login(

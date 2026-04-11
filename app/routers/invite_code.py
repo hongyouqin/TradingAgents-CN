@@ -9,7 +9,7 @@ from app.models.user import User
 from app.routers.auth_db import get_current_user
 from app.services.invite_code import InviteCodeManager
 
-router = APIRouter(prefix="/invite-codes", tags=["邀请码"])
+router = APIRouter(prefix="/invite-codes", tags=["传统邀请码"])
 logger = logging.getLogger(__name__)
 
 

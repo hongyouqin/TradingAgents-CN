@@ -81,7 +81,85 @@ class InviteRewardService:
         except Exception as e:
             logger.error(f"发放新用户奖励失败: {e}", exc_info=True)
             return False, f"发放奖励失败: {str(e)}"
-    
+
+    # ============================
+    # 【新增】二维码扫码绑定奖励
+    # 给微信自动关注绑定使用
+    # ============================
+    async def grant_invite_reward_by_qrcode(self, inviter_id: str, new_user_id: str) -> Tuple[bool, str]:
+        """
+        扫码关注公众号自动绑定邀请后 → 给邀请人发奖励
+        """
+        try:
+            logger.info(f"🎁 【二维码邀请】发放奖励: 邀请人={inviter_id}, 新用户={new_user_id}")
+
+            # 1. 获取邀请人
+            inviter = self.users_collection.find_one({"_id": ObjectId(inviter_id)})
+            if not inviter:
+                return False, "邀请人不存在"
+
+            # 2. 获取新用户信息
+            new_user = self.users_collection.find_one({"_id": ObjectId(new_user_id)})
+            if not new_user:
+                return False, "新用户不存在"
+
+            new_user_phone = new_user.get("phone", "未知手机号")
+
+            # 3. 计算奖励（和你原有邀请奖励规则完全一致）
+            total_invited = inviter.get("invite_rewards", {}).get("total_invited", 0)
+            reward_amount = RewardStrategy.calculate_invite_reward(total_invited)
+
+            # 4. 生成订单号
+            order_no = self._generate_order_no(inviter_id, "QRCODE_INVITE", reward_amount)
+
+            # 5. 构造用户对象给 power_account_service
+            from app.models.user import User
+            inviter_obj = User(**inviter)
+
+            # 6. 发放算力奖励
+            success, msg = await power_account_service.recharge(
+                user=inviter_obj,
+                order_no=order_no,
+                amount=reward_amount,
+                description=f"【扫码关注邀请】新用户 {new_user_phone} 注册，获得 {reward_amount} 算力",
+                metadata={
+                    "reward_type": "qrcode_invite_reward",
+                    "new_user_id": new_user_id,
+                    "new_user_phone": new_user_phone
+                }
+            )
+
+            if not success:
+                return False, msg
+
+            # 7. 写入邀请记录（和原有体系统一）
+            invited_record = {
+                "user_id": new_user_id,
+                "phone": new_user_phone,
+                "invited_at": datetime.utcnow(),
+                "reward_granted": reward_amount,
+                "first_analysis_at": None,
+                "invite_source": "qrcode"  # 标记来自二维码
+            }
+
+            self.users_collection.update_one(
+                {"_id": ObjectId(inviter_id)},
+                {
+                    "$inc": {
+                        "invite_rewards.total_invited": 1,
+                        "invite_rewards.total_reward_power": reward_amount
+                    },
+                    "$push": {"invite_rewards.invited_users": invited_record}
+                }
+            )
+
+            logger.info(f"✅ 【二维码邀请】奖励发放成功: {inviter_id} -> {reward_amount} 算力")
+            return True, f"二维码邀请成功，获得 {reward_amount} 算力"
+
+        except Exception as e:
+            logger.error(f"【二维码邀请】奖励发放失败: {e}", exc_info=True)
+            return False, str(e)
+
     async def grant_invite_reward(self, inviter_id: str, new_user_id: str, 
                                    new_user_phone: str, invite_code: str) -> Tuple[bool, str]:
         """
@@ -100,7 +178,7 @@ class InviteRewardService:
             logger.info(f"🎁 开始发放邀请奖励: 邀请人={inviter_id}, 新用户={new_user_id}")
             
             # 1. 获取邀请人信息
-            inviter_doc = self.users_collection.find_one({"_id": ObjectId(inviter_id)})
+            inviter_doc = await self.users_collection.find_one({"_id": ObjectId(inviter_id)})
             if not inviter_doc:
                 logger.warning(f"邀请人不存在: {inviter_id}")
                 return False, "邀请人不存在"
