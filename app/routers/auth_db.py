@@ -671,6 +671,9 @@ async def wechat_login(
 
 @router.get("/wechat/login-qrcode")
 async def get_wechat_login_qrcode(db=Depends(get_database)):
+    '''
+    获取微信公众号扫码登录二维码，扫码后要求先关注后登录        
+    '''
     import random
     scene = random.randint(1, 99999)
 
@@ -697,39 +700,61 @@ async def get_wechat_login_qrcode(db=Depends(get_database)):
         "data": {"qr_url": qr_url, "scene": scene}
     }
     
-@router.get("/wechat/login-status")
-async def check_wechat_login_status(scene: int, db=Depends(get_database)):
+@router.get("/wechat/login-status", summary="微信扫码登录状态查询", description="前端轮询此接口，查询公众号扫码登录结果，成功则返回token自动登录")
+async def check_wechat_login_status(
+    scene: int,
+    db=Depends(get_database)
+):
+    """
+    **微信公众号扫码登录 - 状态查询接口**
+    
+    前端轮询逻辑：
+    1. 先判断二维码是否存在、是否过期
+    2. 判断用户是否已扫码并关注公众号
+    3. 状态成功 → 根据openid自动注册/登录用户
+    4. 自动绑定邀请关系（如果有预绑定）
+    5. 返回登录令牌给前端完成登录
+    """
+    # 1. 查询登录会话记录
     session = await db["wechat_login_sessions"].find_one({"scene": scene})
 
+    # 2. 会话记录不存在 → 二维码无效
     if not session:
+        return {"code": 404, "msg": "二维码无效"}
+    
+    now = datetime.utcnow()
+    # 3. 会话已过期 → 二维码失效
+    if session["expire_at"] < now:
         return {"code": 404, "msg": "二维码已过期"}
+
+    # 4. 会话有效但未扫码/未关注 → 提示用户操作
     if session["status"] != "success":
         return {"code": 100, "msg": "请扫码关注公众号"}
 
+    # 5. 已扫码但openid未写入 → 登录处理中
     openid = session["openid"]
     if not openid:
         return {"code": 100, "msg": "登录中..."}
 
-
-    # 登录/注册
+    # 6. 自动登录/注册用户（根据微信openid）
     user = await user_service.wechat_qr_login(openid=openid)
-    # 绑定关系
+    
+    # 7. 自动绑定邀请关系（若用户通过邀请二维码关注）
     await user_service.bind_user_to_inviter(user) 
 
-    # ==============================
-    # 生成TOKEN
-    # ==============================
+    # 8. 生成登录令牌（JWT）
     from app.services.auth_service import AuthService
-    token = AuthService.create_access_token(sub=user["username"])
-    refresh_token = AuthService.create_access_token(sub=user["username"], expires_delta=86400*7)
+    token = AuthService.create_access_token(sub=user.username)
+    refresh_token = AuthService.create_access_token(sub=user.username, expires_delta=86400*7)
 
+    # 9. 返回登录成功信息
     return {
         "code": 0,
         "msg": "登录成功",
         "data": {
             "access_token": token,
             "refresh_token": refresh_token,
-            "user": {"id": str(user["_id"]), "username": user["username"]}
+            "user": {"id": str(user.id), "username": user.username}
         }
     }
     

@@ -1,7 +1,9 @@
+import logging
 import xmltodict
 from datetime import datetime
-from app.core.database import get_database
 from app.services.user_qrcode_service import user_qr_service
+
+logger = logging.getLogger('WechatEventService')
 
 class WechatEventService:
     def __init__(self):
@@ -11,7 +13,7 @@ class WechatEventService:
         self.db = db
         self.user_collection = self.db.users
         self.prebind_collection = self.db["user_invite_prebind"]
-        self.login_collection = self.db["wechat_login_records"]  # 登录记录表
+        self.login_collection = self.db["wechat_login_sessions"]  # 登录记录表
 
     async def handle_wechat_message(self, xml_data: str) -> str:
         try:
@@ -44,6 +46,7 @@ class WechatEventService:
             # 登录二维码：scene_id < 100000
             # ==========================================
             if scene_id < 100000:
+                logger.info(f"[扫码登录] scene={scene_id}, openid={openid}")
                 await self.login_collection.update_one(
                     {"scene": scene_id},
                     {

@@ -110,6 +110,7 @@ async def wechat_callback(request: Request):
         sign = hashlib.sha1("".join(tmp).encode()).hexdigest()
         return PlainTextResponse(echostr if sign == signature else "invalid")
 
+    logger.info(f"收到微信扫码回调: {q}")
     body = await request.body()
     wechat_event_service.init_database(db= get_database())  # 确保数据库已初始化
     await wechat_event_service.handle_wechat_message(body.decode())
