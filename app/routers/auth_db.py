@@ -723,6 +723,15 @@ async def check_wechat_login_status(
         return {"code": 404, "msg": "二维码无效"}
     
     now = datetime.utcnow()
+    # 已过期（无论状态是什么）
+    if session["expire_at"] < now:
+        # ✅ 这里顺手更新状态，保证状态干净
+        await db["wechat_login_sessions"].update_one(
+            {"scene": scene},
+            {"$set": {"status": "expired"}}
+        )
+        return {"code": 404, "msg": "二维码已过期"}
+    
     # 3. 会话已过期 → 二维码失效
     if session["expire_at"] < now:
         return {"code": 404, "msg": "二维码已过期"}
