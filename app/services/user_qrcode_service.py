@@ -34,20 +34,27 @@ class UserInviteQRCodeService:
                 return True, "已获取你的专属推广二维码", existing
 
             # 2. 生成 scene_id（从 100000 开始，避免冲突）
-            # ✅ 修复：必须传 {}
             max_scene = await self.collection.find_one({}, sort=[("scene_id", -1)])
             next_scene_id = max_scene["scene_id"] + 1 if max_scene else 100000
 
             # 3. 调用微信生成永久二维码
             qr_data = await self.wechat.create_permanent_qrcode(next_scene_id)
-            ticket = qr_data["ticket"]
-            qr_url = WechatQRCodeService.get_qrcode_image_url(ticket)
+            
+            # ==============================================
+            # 🔥 修复：永久二维码直接返回 url，不需要 ticket！
+            # ==============================================
+            qr_url = qr_data.get("url")  # 直接拿 url
+            if not qr_url:
+                logger.error(f"微信永久二维码返回异常: {qr_data}")
+                return False, "获取二维码链接失败", None
+            
+            ticket = ""  # 永久码可以留空，不需要存 ticket
 
             # 4. 保存到数据库
             doc = {
                 "user_id": user_id,
                 "scene_id": next_scene_id,
-                "ticket": ticket,
+                "ticket": ticket,  # 永久码用不到 ticket，存空即可
                 "qr_url": qr_url,
                 "created_at": int(datetime.now().timestamp() * 1000),
                 "total_scanned": 0,
@@ -58,7 +65,6 @@ class UserInviteQRCodeService:
             return True, "生成推广二维码成功", doc
 
         except Exception as e:
-            # ✅ 加 exc_info=True 才能看到完整堆栈！
             logger.error(f"生成推广二维码失败: {str(e)}", exc_info=True)
             return False, f"生成失败: {str(e)}", None
 
