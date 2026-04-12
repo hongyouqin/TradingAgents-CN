@@ -90,6 +90,7 @@ dependencies = [
     "toml>=0.10.2",
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
+    "xmltodict>=1.0.4",
 ]
 
 [project.optional-dependencies]
