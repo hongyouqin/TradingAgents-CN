@@ -1,6 +1,6 @@
 import httpx
 from datetime import datetime
-from typing import Optional, Tuple, Dict
+from typing import Optional, Dict
 
 class WechatQRCodeService:
     def __init__(self, appid: str, appsecret: str):
@@ -34,10 +34,10 @@ class WechatQRCodeService:
             self.token_expire_time = current_ts + data["expires_in"] - 100
             return self.access_token
 
-    async def create_temp_qrcode(self, scene_id: int, expire_seconds: int = 300):
+    async def create_temp_qrcode(self, scene_id: int, expire_seconds: int = 300) -> Dict:
         """生成临时二维码（默认5分钟过期）"""
         access_token = await self.get_access_token()
-        url = f"{self.base_url}/qrcode/create?access_token={access_token}"
+        url = f"https://api.weixin.qq.com/cgi-bin/qrcode/create?access_token={access_token}"
         
         data = {
             "expire_seconds": expire_seconds,
@@ -48,7 +48,6 @@ class WechatQRCodeService:
         async with httpx.AsyncClient() as client:
             res = await client.post(url, json=data)
             return res.json()
-
 
     async def create_permanent_qrcode(self, scene_id: int) -> Dict:
         """
