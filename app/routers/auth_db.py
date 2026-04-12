@@ -675,7 +675,7 @@ async def get_wechat_login_qrcode(db=Depends(get_database)):
     获取微信公众号扫码登录二维码，扫码后要求先关注后登录        
     '''
     import random
-    scene = random.randint(1, 99999)
+    scene = random.randint(10001, 99999)
 
     appid = settings.WECHAT_APP_ID
     appsecret = settings.WECHAT_APP_SECRET

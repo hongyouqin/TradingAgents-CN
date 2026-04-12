@@ -33,20 +33,47 @@ class WechatEventService:
 
     async def handle_scan_event(self, openid: str, event: str, event_key: str):
         try:
+            # ==================================================================
+            # 1. 优先处理：推广邀请码（字符串永久码）
+            # ==================================================================
+            if event == "subscribe" and event_key.startswith("qrscene_invite_"):
+                scene_str = event_key.replace("qrscene_", "")
+                user_id = scene_str.replace("invite_", "")
+                if user_id:
+                    await self.prebind_collection.update_one(
+                        {"wechat_openid": openid},
+                        {"$set": {"inviter_id": user_id, "status": "waiting"}},
+                        upsert=True
+                    )
+                    logger.info(f"[推广扫码] openid={openid} 邀请人={user_id}")
+                return
+
+            if event == "SCAN" and event_key.startswith("invite_"):
+                user_id = event_key.replace("invite_", "")
+                if user_id:
+                    await self.prebind_collection.update_one(
+                        {"wechat_openid": openid},
+                        {"$set": {"inviter_id": user_id, "status": "waiting"}},
+                        upsert=True
+                    )
+                    logger.info(f"[已关注推广扫码] openid={openid} 邀请人={user_id}")
+                return
+
+            # ==================================================================
+            # 2. 处理：登录二维码（scene_id > 10000）
+            # ==================================================================
             scene_id = None
             if event == "subscribe" and event_key.startswith("qrscene_"):
-                scene_id = int(event_key.replace("qrscene_", ""))
+                scene_val = event_key.replace("qrscene_", "")
+                if scene_val.isdigit():
+                    scene_id = int(scene_val)
+
             elif event == "SCAN" and event_key.isdigit():
                 scene_id = int(event_key)
 
-            if not scene_id:
-                return
-
-            # ==========================================
-            # 登录二维码：scene_id < 100000
-            # ==========================================
-            if scene_id < 100000:
-                logger.info(f"[扫码登录] scene={scene_id}, openid={openid}")
+            # 登录：> 10000
+            if scene_id and scene_id > 10000:
+                logger.info(f"[用户登录] scene={scene_id}, openid={openid}")
                 await self.login_collection.update_one(
                     {"scene": scene_id},
                     {
@@ -59,26 +86,6 @@ class WechatEventService:
                     upsert=True
                 )
                 return
-
-            # ==========================================
-            # 邀请二维码：scene_id >= 100000（原有逻辑）
-            # ==========================================
-            inviter = await self.qrcode_service.get_inviter_by_scene_id(scene_id)
-            if not inviter:
-                return
-
-            inviter_user_id = inviter["user_id"]
-
-            await self.prebind_collection.update_one(
-                {"wechat_openid": openid},
-                {
-                    "$set": {
-                        "inviter_id": inviter_user_id,
-                        "status": "waiting"
-                    }
-                },
-                upsert=True
-            )
 
         except Exception:
             pass

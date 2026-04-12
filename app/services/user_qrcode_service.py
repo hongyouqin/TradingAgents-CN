@@ -23,45 +23,37 @@ class UserInviteQRCodeService:
         self.collection = self.db.user_invite_qrcodes
 
     async def get_or_create_user_qrcode(self, user_id: str) -> Tuple[bool, str, Optional[Dict]]:
-        """
-        获取或创建用户专属永久推广二维码
-        一个用户永远只有一个
-        """
         try:
-            # 1. 查是否已有
+            # 查是否已有
             existing = await self.collection.find_one({"user_id": user_id})
             if existing:
                 return True, "已获取你的专属推广二维码", existing
 
-            # 2. 生成 scene_id（从 100000 开始，避免冲突）
-            max_scene = await self.collection.find_one({}, sort=[("scene_id", -1)])
-            next_scene_id = max_scene["scene_id"] + 1 if max_scene else 100000
+            # 永久字符串场景：invite_用户ID
+            scene_str = f"invite_{user_id}"
 
-            # 3. 调用微信生成永久二维码
-            qr_data = await self.wechat.create_permanent_qrcode(next_scene_id)
-            
-            # ==============================================
-            # 🔥 修复：永久二维码直接返回 url，不需要 ticket！
-            # ==============================================
-            qr_url = qr_data.get("url")  # 直接拿 url
-            if not qr_url:
-                logger.error(f"微信永久二维码返回异常: {qr_data}")
-                return False, "获取二维码链接失败", None
-            
-            ticket = ""  # 永久码可以留空，不需要存 ticket
+            # 生成永久二维码
+            qr_data = await self.wechat.create_permanent_qrcode_str(scene_str)
 
-            # 4. 保存到数据库
+            ticket = qr_data.get("ticket")
+            qr_url = f"https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket={ticket}"
+
+            if not ticket or not qr_url:
+                logger.error(f"微信返回异常: {qr_data}")
+                return False, "获取二维码失败", None
+
             doc = {
                 "user_id": user_id,
-                "scene_id": next_scene_id,
-                "ticket": ticket,  # 永久码用不到 ticket，存空即可
+                "scene_id": scene_str,
+                "ticket": ticket,
                 "qr_url": qr_url,
                 "created_at": int(datetime.now().timestamp() * 1000),
                 "total_scanned": 0,
                 "total_subscribed": 0
             }
-            logger.info(f"生成推广二维码成功: {doc}")
+
             await self.collection.insert_one(doc)
+            logger.info(f"推广二维码生成成功: {scene_str}")
             return True, "生成推广二维码成功", doc
 
         except Exception as e:

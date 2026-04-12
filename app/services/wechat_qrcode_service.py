@@ -53,10 +53,31 @@ class WechatQRCodeService:
             res = await client.post(url, json=data)
             return res.json()
 
+    async def create_permanent_qrcode_str(self, scene_str: str) -> Dict:
+        """
+        永久字符串二维码（无上限，推广专用）
+        """
+        access_token = await self.get_access_token()
+        url = f"https://api.weixin.qq.com/cgi-bin/qrcode/create?access_token={access_token}"
+
+        payload = {
+            "action_name": "QR_LIMIT_STR_SCENE",
+            "action_info": {
+                "scene": {
+                    "scene_str": scene_str
+                }
+            }
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload)
+            return resp.json()
+
     async def create_permanent_qrcode(self, scene_id: int) -> Dict:
         """
         创建永久带参数二维码
         scene_id: 数字场景值，必须唯一
+        永久二维码没有过期时间，微信官方要求必须是 scene_id1-1-100000
         """
         access_token = await self.get_access_token()
         url = f"https://api.weixin.qq.com/cgi-bin/qrcode/create?access_token={access_token}"
