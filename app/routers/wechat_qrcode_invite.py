@@ -71,13 +71,13 @@ async def get_invite_stats(user: dict = Depends(get_current_user)):
         "created_at": {"$gte": today_start}
     })
 
-    # 4. 最近邀请的用户列表
     invited_users = []
     cursor = user_collection.find({
         "invited_by": user_id
     }).sort("created_at", -1).limit(50)
 
-    async for u in cursor:
+    # 同步 mongo → 普通 for，不是 async for
+    for u in cursor:
         invited_users.append({
             "user_id": str(u["_id"]),
             "created_at": u.get("created_at"),
