@@ -3,7 +3,7 @@
 替代原有的基于配置文件的认证机制
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 from typing import Optional
 
@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, validator
 
+from app.core.database import get_database
 from app.services.anti_fraud_service import AntiFraudService
 from app.services.auth_service import AuthService
 from app.services.user_service import user_service
@@ -20,8 +21,10 @@ from app.models.operation_log import ActionType
 import re
 from typing import Dict, Any
 
+from app.services.wechat_qrcode_service import WechatQRCodeService
 from app.utils.utils import get_real_client_ip
 from app.services.wechat_pay_service import wechat_pay_service
+from app.core.config import settings
 
 
 
@@ -611,6 +614,8 @@ async def wechat_login(
 
         # 1. 微信登录（核心逻辑，一定执行）
         user, err_type, err_msg = await user_service.wechat_auth_login(code)
+        # 新用户通过扫码邀请码邀请进来，才能绑定关系
+        await user_service.bind_user_to_inviter(user)  # 绑定邀请关系
 
         if not user:
             logger.warning(f"❌ 微信登录失败: {err_msg}")
@@ -663,6 +668,70 @@ async def wechat_login(
     except Exception as e:
         logger.error(f"❌ 微信登录异常: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="微信登录服务异常")
+
+@router.get("/wechat/login-qrcode")
+async def get_wechat_login_qrcode(db=Depends(get_database)):
+    import random
+    scene = random.randint(1, 99999)
+
+    appid = settings.WECHAT_APP_ID
+    appsecret = settings.WECHAT_APP_SECRET
+    wechat_service = WechatQRCodeService(appid, appsecret)
+
+    # 生成临时二维码（5分钟有效）
+    qr_data = await wechat_service.create_temp_qrcode(scene, expire_seconds=300)
+    ticket = qr_data["ticket"]
+    qr_url = wechat_service.get_qrcode_image_url(ticket)
+
+    await db["wechat_login_sessions"].insert_one({
+        "scene": scene,
+        "openid": None,
+        "status": "waiting",
+        "created_at": datetime.utcnow(),
+        "expire_at": datetime.utcnow() + timedelta(seconds=300)
+    })
+
+    return {
+        "code": 0,
+        "msg": "ok",
+        "data": {"qr_url": qr_url, "scene": scene}
+    }
+    
+@router.get("/wechat/login-status")
+async def check_wechat_login_status(scene: int, db=Depends(get_database)):
+    session = await db["wechat_login_sessions"].find_one({"scene": scene})
+
+    if not session:
+        return {"code": 404, "msg": "二维码已过期"}
+    if session["status"] != "success":
+        return {"code": 100, "msg": "请扫码关注公众号"}
+
+    openid = session["openid"]
+    if not openid:
+        return {"code": 100, "msg": "登录中..."}
+
+
+    # 登录/注册
+    user = await user_service.wechat_qr_login(openid=openid)
+    # 绑定关系
+    await user_service.bind_user_to_inviter(user) 
+
+    # ==============================
+    # 生成TOKEN
+    # ==============================
+    from app.services.auth_service import AuthService
+    token = AuthService.create_access_token(sub=user["username"])
+    refresh_token = AuthService.create_access_token(sub=user["username"], expires_delta=86400*7)
+
+    return {
+        "code": 0,
+        "msg": "登录成功",
+        "data": {
+            "access_token": token,
+            "refresh_token": refresh_token,
+            "user": {"id": str(user["_id"]), "username": user["username"]}
+        }
+    }
     
 @router.post("/reset-password-by-phone")
 async def reset_password_by_phone(request: ResetPasswordByPhoneRequest):
@@ -825,11 +894,11 @@ async def authenticate_by_password(identifier: str, password: str):
             return user
         
         # 尝试通过邮箱认证
-        user_by_email = await user_service.get_user_by_email(identifier)
-        if user_by_email:
-            # 验证密码
-            if user_service.verify_password(password, user_by_email.hashed_password):
-                return user_by_email
+        # user_by_email = await user_service.get_user_by_email(identifier)
+        # if user_by_email:
+        #     # 验证密码
+        #     if user_service.verify_password(password, user_by_email.hashed_password):
+        #         return user_by_email
         
         # 尝试通过手机号认证
         if identifier.isdigit() and len(identifier) == 11:

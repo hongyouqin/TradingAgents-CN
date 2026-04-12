@@ -11,6 +11,7 @@ from pymongo import MongoClient
 from bson import ObjectId
 
 from app.core.config import settings
+from app.core.database import get_database
 from app.models.user import RegistrationError, User, UserCreate, UserUpdate, UserResponse
 from app.services.anti_fraud_service import AntiFraudService
 from app.services.invite_code import InviteCodeManager
@@ -69,6 +70,49 @@ class UserService:
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """验证密码"""
         return UserService.hash_password(plain_password) == hashed_password
+    
+    
+    async def bind_user_to_inviter(self, user: User):
+        """用户登录后绑定邀请关系,针对微信扫码关注的用户"""
+        try:
+            openid = user.openid
+
+            # 1. 查询是否有预绑定
+            db = get_database()
+            prebind = await db["user_invite_prebind"].find_one({
+                "wechat_openid": openid,
+                "status": "waiting"
+            })
+
+            if prebind and not user.invited_by:
+                inviter_id = prebind["inviter_id"]
+
+                # 2. 绑定邀请关系
+                logger.info(f"🔗 绑定邀请关系: 用户 {user.id} 被邀请人 {inviter_id}")
+                await db.users.update_one(
+                    {"_id": user.id},
+                    {"$set": {"invited_by": inviter_id}}
+                )
+
+                # 3. 发放二维码邀请奖励
+                logger.info(f"🎁 发放二维码邀请奖励: 邀请人 {inviter_id} 获得奖励，邀请新用户 {user.id}")
+                from app.services.invite_reward_service import InviteRewardService
+                reward_service = InviteRewardService(db)
+                await reward_service.grant_invite_reward_by_qrcode(
+                    inviter_id=inviter_id,
+                    new_user_id=str(user.id)
+                )
+
+                # 4. 标记已绑定
+                await db["user_invite_prebind"].update_one(
+                    {"_id": prebind["_id"]},
+                    {"$set": {"status": "bound"}}
+                )
+            else:
+                logger.info(f"不能参与邀请绑定，没有通过邀请码进来，或者不是新用户: openid={openid}, user_id={user.id}")
+
+        except Exception as e:
+            pass  # 不影响登录
     
     async def _check_require_invite_code(self) -> bool:
         """
@@ -155,7 +199,69 @@ class UserService:
             logger.error(f"❌ 创建用户失败: {e}")
             return None
     
+    async def grant_new_user_reward(self, user_obj: User) -> Tuple[bool, str]:
+        # 发放新用户奖励
+        try:
+            from app.services.invite_reward_service import InviteRewardService
+            reward_service = InviteRewardService(self.db)
+            logger.info(f"🎁 新用户注册用户信息: {user_obj}")
+            reward_success, reward_msg = await reward_service.grant_new_user_reward(user_obj)
+            if reward_success:
+                self.users_collection.update_one(
+                    {"_id": user_obj.id},
+                    {"$set": {"new_user_reward_granted": True}}
+                )
+                logger.info(f"🎁 新用户注册奖励发放成功: {reward_msg}")
+            
+            return reward_success, reward_msg
+        except Exception as e:
+            logger.warning(f"⚠️ 新用户注册奖励发放失败: {e}")
+        
+        return False, "发放奖励失败"
     
+    async def wechat_qr_login(self, openid: str) -> User:
+        '''微信扫码登录/注册'''
+        db = get_database()
+        user = await db.users.find_one({"openid": openid})
+
+        if not user:
+            # 生成用户名
+            username = f"wx_{openid[-8:]}"
+            while await db.users.find_one({"username": username}):
+                username = f"wx_{openid[-8:]}_{int(datetime.utcnow().timestamp() % 10000)}"
+
+            user_doc = {
+                "username": username,
+                "nickname": f"微信用户_{openid[-8:]}",
+                "avatar": "",
+                "sex": 0,
+                "city": "",
+                "province": "",
+                "email": None,
+                "phone": None,
+                "openid": openid,
+                "hashed_password": "",
+                "is_active": True,
+                "is_verified": True,
+                "is_admin": False,
+                "created_at": datetime.utcnow(),
+                "last_login": datetime.utcnow(),
+                "register_type": "wechat",
+                "invited_by": None,
+                "new_user_reward_granted": False,
+                "preferences": {},
+                "daily_quota": 1000,
+                "concurrent_limit": 3,
+                "power_balance": 0,
+            }
+
+            result = await db.users.insert_one(user_doc)
+            user = await db.users.find_one({"_id": result.inserted_id})
+
+            # ✅ 发放新人奖励（必须 await）
+            await self.grant_new_user_reward(user_obj=user)
+
+        return User(**user)
     
     async def wechat_auth_login(self, code: str) -> Tuple[Optional[User], Optional[str], Optional[str]]:
         try:
@@ -264,19 +370,7 @@ class UserService:
             user_obj.id = str(result.inserted_id)
 
             # 发放新用户奖励
-            try:
-                from app.services.invite_reward_service import InviteRewardService
-                reward_service = InviteRewardService(self.db)
-                logger.info(f"🎁 新用户注册用户信息: {user_obj}")
-                reward_success, reward_msg = await reward_service.grant_new_user_reward(user_obj)
-                if reward_success:
-                    self.users_collection.update_one(
-                        {"_id": result.inserted_id},
-                        {"$set": {"new_user_reward_granted": True}}
-                    )
-                    logger.info(f"🎁 新用户注册奖励发放成功: {reward_msg}")
-            except Exception as e:
-                logger.warning(f"⚠️ 新用户注册奖励发放失败: {e}")
+            self.grant_new_user_reward(user_obj=user_obj)
 
             return User(**user_doc), None, None
 

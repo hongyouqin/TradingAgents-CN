@@ -34,6 +34,22 @@ class WechatQRCodeService:
             self.token_expire_time = current_ts + data["expires_in"] - 100
             return self.access_token
 
+    async def create_temp_qrcode(self, scene_id: int, expire_seconds: int = 300):
+        """生成临时二维码（默认5分钟过期）"""
+        access_token = await self.get_access_token()
+        url = f"{self.base_url}/qrcode/create?access_token={access_token}"
+        
+        data = {
+            "expire_seconds": expire_seconds,
+            "action_name": "QR_SCENE",
+            "action_info": {"scene": {"scene_id": scene_id}}
+        }
+        
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=data)
+            return res.json()
+
+
     async def create_permanent_qrcode(self, scene_id: int) -> Dict:
         """
         创建永久带参数二维码
