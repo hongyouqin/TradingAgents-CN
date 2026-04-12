@@ -22,14 +22,14 @@ WECHAT_TOKEN = "qrcode123456fdsjaflj"
 # ==============================================
 @router.get("/invite-qrcode")
 async def get_user_invite_qrcode(user: dict = Depends(get_current_user)):
-    """
-    获取用户专属推广二维码
-    一人一码，永久有效，无限拉新
-    """
     user_id = user["id"]
     
-    # 生成或获取二维码
-    user_qr_service.init_database(db= get_database())  # 确保数据库已初始化
+    # ✅ 同步获取异步 DB（你的结构就是这样）
+    db = get_database()
+    
+    # ✅ 初始化 service
+    user_qr_service.init_database(db)
+
     ok, msg, qrcode = await user_qr_service.get_or_create_user_qrcode(user_id)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)

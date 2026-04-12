@@ -27,16 +27,17 @@ class UserInviteQRCodeService:
         获取或创建用户专属永久推广二维码
         一个用户永远只有一个
         """
-        # 1. 查是否已有
-        existing = await self.collection.find_one({"user_id": user_id})
-        if existing:
-            return True, "已获取你的专属推广二维码", existing
-
-        # 2. 生成 scene_id（从 100000 开始，避免冲突）
-        max_scene = await self.collection.find_one(sort=[("scene_id", -1)])
-        next_scene_id = max_scene["scene_id"] + 1 if max_scene else 100000
-
         try:
+            # 1. 查是否已有
+            existing = await self.collection.find_one({"user_id": user_id})
+            if existing:
+                return True, "已获取你的专属推广二维码", existing
+
+            # 2. 生成 scene_id（从 100000 开始，避免冲突）
+            # ✅ 修复：必须传 {}
+            max_scene = await self.collection.find_one({}, sort=[("scene_id", -1)])
+            next_scene_id = max_scene["scene_id"] + 1 if max_scene else 100000
+
             # 3. 调用微信生成永久二维码
             qr_data = await self.wechat.create_permanent_qrcode(next_scene_id)
             ticket = qr_data["ticket"]
@@ -57,6 +58,8 @@ class UserInviteQRCodeService:
             return True, "生成推广二维码成功", doc
 
         except Exception as e:
+            # ✅ 加 exc_info=True 才能看到完整堆栈！
+            logger.error(f"生成推广二维码失败: {str(e)}", exc_info=True)
             return False, f"生成失败: {str(e)}", None
 
     async def get_inviter_by_scene_id(self, scene_id: int) -> Optional[Dict]:
