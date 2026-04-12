@@ -1,6 +1,10 @@
+import logging
 import httpx
 from datetime import datetime
 from typing import Optional, Dict
+
+
+logger = logging.getLogger('WechatQRCodeService')
 
 class WechatQRCodeService:
     def __init__(self, appid: str, appsecret: str):
@@ -69,6 +73,41 @@ class WechatQRCodeService:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, json=payload)
             return resp.json()
+        
+    
+    async def create_ai_stock_menu(self):
+        """
+        创建公众号自定义菜单：AI研股 → 跳转到 https://nbstockai.com/
+        """
+        try:
+            access_token = await self.get_access_token()
+            url = f"https://api.weixin.qq.com/cgi-bin/menu/create?access_token={access_token}"
+
+            # 菜单结构：1个按钮，点击跳转网页
+            menu_data = {
+                "button": [
+                    {
+                        "type": "view",
+                        "name": "AI研股",
+                        "url": "https://nbstockai.com/"
+                    }
+                ]
+            }
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=menu_data)
+                data = resp.json()
+
+            if data.get("errcode") == 0:
+                logger.info("✅ 微信菜单创建成功：AI研股")
+                return True, "菜单创建成功"
+            else:
+                logger.error(f"❌ 菜单创建失败: {data}")
+                return False, f"失败：{data}"
+
+        except Exception as e:
+            logger.error(f"❌ 创建菜单异常: {str(e)}")
+            return False, str(e)
 
     @staticmethod
     def get_qrcode_image_url(ticket: str) -> str:
