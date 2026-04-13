@@ -73,7 +73,7 @@ class FavoriteStock(BaseModel):
 class InvitedUserRecord(BaseModel):
     """邀请的用户记录"""
     user_id: str = Field(..., description="被邀请用户ID")
-    phone: str = Field(..., description="被邀请用户手机号")
+    phone: Optional[str] = Field(None, description="被邀请用户手机号") 
     invited_at: datetime = Field(default_factory=now_tz, description="邀请时间")
     reward_granted: int = Field(..., description="已发放的基础奖励")
     first_analysis_at: Optional[datetime] = Field(None, description="首次分析时间")

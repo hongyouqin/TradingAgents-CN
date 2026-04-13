@@ -138,7 +138,6 @@ class InviteRewardService:
                 "username": username,
                 "invited_at": datetime.utcnow(),
                 "reward_granted": reward_amount,
-                "first_analysis_at": None,
                 "invite_source": "qrcode"  # 标记来自二维码
             }
 
