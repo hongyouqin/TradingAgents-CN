@@ -14,7 +14,6 @@ from app.core.config import settings
 from app.core.database import get_database
 from app.models.user import RegistrationError, User, UserCreate, UserUpdate, UserResponse
 from app.services.anti_fraud_service import AntiFraudService
-from app.services.invite_code import InviteCodeManager
 from app.services.sms_code_service import SMSCodeService
 from app.services.wechat_pay_service import wechat_pay_service
 
@@ -37,7 +36,6 @@ class UserService:
         self.db = self.client[settings.MONGO_DB]
         self.users_collection = self.db.users
         self.sms_service = SMSCodeService()
-        self.invite_manager = InviteCodeManager(self.db) 
         self.anti_fraud = AntiFraudService(self.db)
         
         self._create_indexes()
