@@ -268,9 +268,12 @@ class UserService:
 
             result = await db.users.insert_one(user_doc)
             user = await db.users.find_one({"_id": result.inserted_id})
-
-            # ✅ 发放新人奖励（必须 await）
-            await self.grant_new_user_reward(user_obj=user)
+        else:
+            cur_user = User(**user)
+            if not getattr(cur_user, 'new_user_reward_granted', False):
+                # 发放新人奖励
+                logger.info("微信扫码登录发放新人奖励")
+                await self.grant_new_user_reward(user_obj=cur_user)
 
         return User(**user)
     
@@ -303,6 +306,14 @@ class UserService:
                     {"$set": {"last_login": datetime.utcnow()}}
                 )
                 logger.info(f"✅ 微信用户登录成功: {nickname}, openid={openid}")
+                
+                cur_user = User(**user_doc)
+                if not getattr(cur_user, 'new_user_reward_granted', False):
+                    # 发放新人奖励
+                    logger.info("微信登录发放新人奖励")
+                    await self.grant_new_user_reward(user_obj=cur_user)
+                    
+                
                 return User(**user_doc), None, None
 
             # 4. 自动注册（写入真实微信资料）
@@ -310,6 +321,7 @@ class UserService:
             while self.users_collection.find_one({"username": username}):
                 username = f"wx_{openid[-8:]}_{int(time.time() % 10000)}"
 
+            logger.info(f"微信用户注册 username={username}")
             user_doc = {
                 "username": username,
                 "nickname": nickname,
@@ -378,12 +390,9 @@ class UserService:
             # 校验通过才插入数据库
             result = self.users_collection.insert_one(user_doc)
             user_doc["_id"] = result.inserted_id
-            user_obj.id = str(result.inserted_id)
 
-            # 发放新用户奖励
-            self.grant_new_user_reward(user_obj=user_obj)
 
-            return User(**user_doc), None, None
+            return user_obj, None, None
 
         except Exception as e:
             logger.error(f"❌ 公众号登录失败: {e}", exc_info=True)

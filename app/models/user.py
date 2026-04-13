@@ -112,10 +112,11 @@ class User(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')
     openid: Optional[str] = Field(None, description="微信openid")
-    hashed_password: str
+    hashed_password: Optional[str]  = None
     is_active: bool = True
     is_verified: bool = False
     is_admin: bool = False
+    new_user_reward_granted: bool = False
     created_at: datetime = Field(default_factory=now_tz)
     updated_at: datetime = Field(default_factory=now_tz)
     last_login: Optional[datetime] = None

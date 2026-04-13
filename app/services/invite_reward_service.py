@@ -6,6 +6,7 @@ import logging
 import time
 import hashlib
 
+from app.models.user import User
 from app.services.reward_strategy import RewardStrategy
 from app.services.power_account_service import power_account_service
 
@@ -27,7 +28,7 @@ class InviteRewardService:
         random_str = hashlib.md5(f"{user_id}{timestamp}{reward_type}".encode()).hexdigest()[:8]
         return f"INVITE_{reward_type}_{user_id}_{timestamp}_{random_str}"
     
-    async def grant_new_user_reward(self, user) -> Tuple[bool, str]:
+    async def grant_new_user_reward(self, user: User) -> Tuple[bool, str]:
         """
         发放新用户注册奖励（给新用户自己）
         
