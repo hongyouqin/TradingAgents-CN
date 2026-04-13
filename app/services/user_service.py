@@ -74,6 +74,7 @@ class UserService:
         """用户登录后绑定邀请关系,针对微信扫码关注的用户"""
         try:
             openid = user.openid
+            user_id = str(user.id) 
 
             # 1. 查询是否有预绑定
             db = get_database()
@@ -84,6 +85,18 @@ class UserService:
 
             if prebind and not user.invited_by:
                 inviter_id = prebind["inviter_id"]
+
+                # ==========================================
+                # 🔥 禁止自己邀请自己
+                # ==========================================
+                if inviter_id == user_id:
+                    logger.warning(f"❌ 用户 {user_id} 尝试自己邀请自己，已拒绝")
+                    # 标记为已处理，避免重复判断
+                    await db["user_invite_prebind"].update_one(
+                        {"_id": prebind["_id"]},
+                        {"$set": {"status": "invalid"}}
+                    )
+                    return
 
                 # 2. 绑定邀请关系
                 logger.info(f"🔗 绑定邀请关系: 用户 {user.id} 被邀请人 {inviter_id}")
