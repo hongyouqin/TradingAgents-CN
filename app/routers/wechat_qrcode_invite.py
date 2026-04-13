@@ -81,7 +81,7 @@ async def get_invite_stats(user: dict = Depends(get_current_user)):
         invited_users.append({
             "user_id": str(u["_id"]),
             "created_at": u.get("created_at"),
-            "nickname": u.get("nickname", "未知用户"),
+            "nickname": u.get("username", "未知用户"),
             "avatar": u.get("avatar", ""),
             "invite_source": u.get("invite_source", "未知")
         })

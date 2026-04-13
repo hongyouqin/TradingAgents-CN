@@ -98,6 +98,7 @@ class UserService:
                 logger.info(f"🎁 发放二维码邀请奖励: 邀请人 {inviter_id} 获得奖励，邀请新用户 {user.id}")
                 from app.services.invite_reward_service import InviteRewardService
                 reward_service = InviteRewardService(db)
+                #这里db用的是异步的
                 await reward_service.grant_invite_reward_by_qrcode(
                     inviter_id=inviter_id,
                     new_user_id=str(user.id)
@@ -108,8 +109,7 @@ class UserService:
                     {"_id": prebind["_id"]},
                     {"$set": {"status": "bound"}}
                 )
-            else:
-                logger.info(f"不能参与邀请绑定，没有通过邀请码进来，或者不是新用户: openid={openid}, user_id={user.id}")
+
 
         except Exception as e:
             pass  # 不影响登录
