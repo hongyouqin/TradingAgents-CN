@@ -1227,6 +1227,13 @@ class AKShareProvider(BaseStockDataProvider):
 
                 # 标准化股票代码
                 symbol_6 = symbol.zfill(6)
+                stock_info = self.get_stock_basic_info(symbol_6)
+                stock_name = ""
+                if stock_info is not None:
+                    stock_name = stock_info.get("name", "")
+                    
+                keywords = f"{symbol_6},{stock_name}".strip()
+                self.logger.info("akshare源个股新闻查询关键词: %s", keywords)
 
                 # 获取东方财富个股新闻，添加重试机制
                 max_retries = 3
@@ -1235,7 +1242,7 @@ class AKShareProvider(BaseStockDataProvider):
 
                 for attempt in range(max_retries):
                     try:
-                        news_df = ak.stock_news_em(symbol=symbol_6)
+                        news_df = ak.stock_news_em(symbol=keywords)
                         break  # 成功则跳出重试循环
                     except json.JSONDecodeError as e:
                         if attempt < max_retries - 1:
