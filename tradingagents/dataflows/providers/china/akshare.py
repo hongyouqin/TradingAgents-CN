@@ -1202,6 +1202,28 @@ class AKShareProvider(BaseStockDataProvider):
                 "error": str(e)
             }
 
+    def _get_stock_info(self, code: str = None):
+        """同步获取股票信息"""
+        if not code:
+            return None
+        
+        # 获取股票名称 - 调用异步的 get_stock_basic_info
+        try:
+            # 方式1: 使用 asyncio.run() 直接运行异步函数
+            stock_info = asyncio.run(self.get_stock_basic_info(code))
+            return stock_info
+        except RuntimeError:
+            # 如果已经有事件循环在运行，使用这种方式
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                # 在新线程中运行 asyncio.run
+                future = executor.submit(asyncio.run, self.get_stock_basic_info(code))
+                stock_info = future.result()
+                return stock_info
+        except Exception as e:
+            self.logger.warning(f"获取股票信息失败: {e}")
+            return None
+
     def get_stock_news_sync(self, symbol: str = None, limit: int = 10) -> Optional[pd.DataFrame]:
         """
         获取股票新闻（同步版本，返回原始 DataFrame）
@@ -1227,11 +1249,11 @@ class AKShareProvider(BaseStockDataProvider):
 
                 # 标准化股票代码
                 symbol_6 = symbol.zfill(6)
-                stock_info = self.get_stock_basic_info(symbol_6)
+                stock_info = self._get_stock_info(code=symbol_6)
                 stock_name = ""
                 if stock_info is not None:
                     stock_name = stock_info.get("name", "")
-                    
+                
                 keywords = f"{symbol_6},{stock_name}".strip()
                 self.logger.info("akshare源个股新闻查询关键词: %s", keywords)
 
