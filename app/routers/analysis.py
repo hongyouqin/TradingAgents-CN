@@ -16,6 +16,7 @@ import asyncio
 
 from app.models.user import User
 from app.routers.auth_db import get_current_user
+from app.services.wechat_message_service import wechat_message_service
 from app.services.power_account_service import power_account_service
 from app.services.memory_state_manager import get_memory_state_manager
 from app.services.queue_service import get_queue_service, QueueService
@@ -237,12 +238,16 @@ async def submit_single_analysis(
                     success, msg = await power_account_service.confirm_consume(
                         order_no=consume_no
                     )
-                    
+                        
                     if success:
                         logger.info(f"✅ 分析成功并确认扣款: {task_id}")
                     else:
                         # 确认扣款失败（异常情况）
                         logger.error(f"🚨 严重告警: 确认扣款失败,用户白嫖一次! task_id={task_id}, order_no={consume_no}, msg={msg}")
+                        
+                    # 通知用户分析完成（可以通过WebSocket发送通知）
+                    openid = user.get("openid")
+                    wechat_message_service.send_analysis_result_notification(openid= openid, task_id=task_id, symbol=request.symbol)
                 else:
                     # 分析失败：取消扣款（解冻金额）
                     await power_account_service.cancel_consume(

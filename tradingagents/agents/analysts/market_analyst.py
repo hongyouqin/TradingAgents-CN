@@ -216,7 +216,7 @@ def create_market_analyst(llm, toolkit):
                     "   - ticker: {ticker}\n"
                     "   - start_date: {start_date_5y}\n"
                     "   - end_date: {current_date}\n"
-                    "   注意：必须获取 3 年全部日频K线数据，用于趋势-情绪-时机分析\n"
+                    "   注意：必须获取 5 年全部日频K线数据，用于趋势-情绪-时机分析\n"
                     "2. 如果消息历史中已经有工具结果（ToolMessage），立即基于工具数据生成最终分析报告\n"
                     "3. 不要重复调用工具！一次工具调用就足够了！\n"
                     "4. 接收到工具数据后，必须立即生成完整的技术分析报告，不要再调用任何工具\n"
