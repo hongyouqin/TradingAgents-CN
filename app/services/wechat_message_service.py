@@ -56,11 +56,11 @@ class WechatMessageService:
         if not openid:
             logger.warning("用户无openid，无法发送微信通知")
             return
-
+        logger.info(f"准备发送分析结果通知给用户 {openid}，任务ID: {task_id}, 股票代码: {symbol}")
         # ==========================
         # 🔥 这里必须填你的【模板ID】
         # ==========================
-        TEMPLATE_ID = "你的模板ID（必须从公众号后台复制）"
+        TEMPLATE_ID = "3AF-CmgWE-NQevnHL02HLRmmhQwHZ4hMpvjoKFxaH2M"
 
         data = {
             "first": {"value": f"您的{symbol}分析报告已完成！"},
