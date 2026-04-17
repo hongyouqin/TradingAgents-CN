@@ -64,9 +64,10 @@ class WechatMessageService:
             "first": {"value": f"您的{symbol}分析报告已完成！"},
             "keyword1": {"value": symbol},
             "keyword2": {"value": "刚刚"},
-            "character_string3": {"value": "完成"},  # 这里改短！
+            "character_string3": {"value": "100"},  # 必须是纯数字！
             "remark": {"value": "点击查看完整报告"}
         }
+        logger.info(f"构建模板消息数据: {data}")
 
         jump_url = f"https://nbstockai.com/api/reports/view/{task_id}"
 
