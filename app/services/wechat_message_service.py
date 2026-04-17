@@ -64,7 +64,7 @@ class WechatMessageService:
             "first": {"value": f"您的{symbol}分析报告已完成！"},
             "keyword1": {"value": symbol},
             "keyword2": {"value": "刚刚"},
-            "character_string3": {"value": task_id},  # 🔥 必加，不然报错
+            "character_string3": {"value": "完成"},  # 这里改短！
             "remark": {"value": "点击查看完整报告"}
         }
 
