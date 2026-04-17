@@ -54,24 +54,26 @@ class WechatMessageService:
 
     async def send_analysis_result_notification(self, openid: str, task_id: str, symbol: str):
         if not openid:
-            logger.warning("用户无openid，无法发送微信通知")
+            logger.warning("用户openid为空，不发送微信通知")
             return
 
-        TEMPLATE_ID = "3AF-CmgWE-NQevnHL02HLRmmhQwHZ4hMpvjoKFxaH2M"
+        # 真实当前时间
+        from datetime import datetime
+        now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
 
-        # ✅ 所有微信模板需要的字段全部补齐（一个都不能少）
+        # ✅ 你最新的模板ID
+        TEMPLATE_ID = "l0BxhG1_4TLJZw2SFtnVHo3qn-FuX81oj3m13vMIPqc"
+
+        # ✅ 100% 匹配你的新模板字段
         data = {
-            "first": {"value": f"您的{symbol}分析报告已完成！"},
-            "keyword1": {"value": symbol},
-            "keyword2": {"value": "刚刚"},
-            "character_string3": {"value": "100"},   # 数字字段
-            "time8": {"value": "2026-04-17 00:00"},  # 时间字段（必须补）
-            "remark": {"value": "点击查看完整报告"}
+            "thing2": {"value": f"股票分析 {symbol}"},  # 产品名称
+            "time5": {"value": now},                   # 完成时间
         }
 
-        jump_url = f"https://nbstockai.com/api/reports/view/{task_id}"
+        jump_url = f"https://nbstockai.com/reports/view/{task_id}"
 
-        logger.info(f"构建模板消息数据: {data}")
+        logger.info(f"发送微信通知 → 用户：{openid}，股票：{symbol}")
+        logger.info(f"模板数据：{data}")
 
         return await self.send_template_msg(
             openid=openid,
@@ -79,5 +81,6 @@ class WechatMessageService:
             data=data,
             url=jump_url
         )
+
 
 wechat_message_service = WechatMessageService()
