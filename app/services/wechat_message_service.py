@@ -56,20 +56,22 @@ class WechatMessageService:
         if not openid:
             logger.warning("用户无openid，无法发送微信通知")
             return
-        logger.info(f"准备发送分析结果通知给用户 {openid}，任务ID: {task_id}, 股票代码: {symbol}")
 
         TEMPLATE_ID = "3AF-CmgWE-NQevnHL02HLRmmhQwHZ4hMpvjoKFxaH2M"
 
+        # ✅ 所有微信模板需要的字段全部补齐（一个都不能少）
         data = {
             "first": {"value": f"您的{symbol}分析报告已完成！"},
             "keyword1": {"value": symbol},
             "keyword2": {"value": "刚刚"},
-            "character_string3": {"value": "100"},  # 必须是纯数字！
+            "character_string3": {"value": "100"},   # 数字字段
+            "time8": {"value": "2026-04-17 00:00"},  # 时间字段（必须补）
             "remark": {"value": "点击查看完整报告"}
         }
-        logger.info(f"构建模板消息数据: {data}")
 
         jump_url = f"https://nbstockai.com/api/reports/view/{task_id}"
+
+        logger.info(f"构建模板消息数据: {data}")
 
         return await self.send_template_msg(
             openid=openid,
