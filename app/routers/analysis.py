@@ -247,7 +247,8 @@ async def submit_single_analysis(
                         
                     # 通知用户分析完成（可以通过WebSocket发送通知）
                     openid = user.get("openid")
-                    wechat_message_service.send_analysis_result_notification(openid= openid, task_id=task_id, symbol=request.symbol)
+                    result = await wechat_message_service.send_analysis_result_notification(openid= openid, task_id=task_id, symbol=request.symbol)
+                    logger.info(f"📱 微信通知发送结果: {result}")
                 else:
                     # 分析失败：取消扣款（解冻金额）
                     await power_account_service.cancel_consume(
