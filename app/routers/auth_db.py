@@ -598,6 +598,35 @@ async def register_by_phone(
             }
         )
 
+@router.get("/wechat/js_config")
+async def get_js_config(
+    url: str,
+    request: Request
+):
+    """
+    获取微信公众号 JS-SDK 配置
+    
+    前端调用此接口获取微信 JS-SDK 配置信息，用于微信支付等功能。
+    
+    **参数**：
+- url: 当前页面的完整 URL，微信 JS-SDK 需要基于此 URL 生成签名
+    """
+    try:
+        wx_config = await wechat_pay_service.get_js_config(url)
+        logger.info("✅ JS-SDK配置获取成功")
+        return {
+            "success": True,
+            "data": {
+                "wx_config": wx_config  # 有就返回，没有就null
+            },
+            "message": "获取JS-SDK配置"
+        }
+    except Exception as e:
+        # 重点：这里只打警告，不抛错，不影响登录！
+        logger.warning(f"⚠️ JS-SDK配置获取失败: {e}")
+        raise HTTPException(status_code=500, detail="JS-SDK配置获取失败")
+
+
 # ====================== 微信公众号登录======================
 @router.post("/wechat/login")
 async def wechat_login(
