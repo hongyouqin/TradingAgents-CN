@@ -1,5 +1,6 @@
 import logging
 import httpx
+from datetime import datetime, timedelta
 from app.core.config import settings
 
 logger = logging.getLogger('WechatMessageService')
@@ -9,12 +10,19 @@ class WechatMessageService:
         self.appid = settings.WECHAT_APP_ID
         self.appsecret = settings.WECHAT_APP_SECRET
         self.access_token = None
+        self.token_expire_time = datetime.min  # token 过期时间
 
     async def get_access_token(self):
-        """获取微信公众号 access_token（线上服务器可用）"""
-        if self.access_token:
+        """
+        获取微信公众号 access_token（自动处理过期 + 重试）
+        微信 access_token 默认有效期 7200 秒
+        """
+        # 如果 token 存在且没过期，直接返回
+        now = datetime.now()
+        if self.access_token and now < self.token_expire_time:
             return self.access_token
 
+        # 否则重新获取
         url = "https://api.weixin.qq.com/cgi-bin/token"
         params = {
             "grant_type": "client_credential",
@@ -28,7 +36,10 @@ class WechatMessageService:
 
         if "access_token" in data:
             self.access_token = data["access_token"]
-            logger.info(f"获取 access_token 成功: {self.access_token[:10]}...")
+            expires_in = data.get("expires_in", 7200)  # 有效期秒数
+            self.token_expire_time = now + timedelta(seconds=expires_in - 60)  # 提前60秒过期，避免边界问题
+            
+            logger.info(f"获取 access_token 成功: {self.access_token[:10]}...，有效期至: {self.token_expire_time}")
             return self.access_token
         else:
             logger.error(f"获取 access_token 失败: {data}")
@@ -49,32 +60,39 @@ class WechatMessageService:
         async with httpx.AsyncClient() as client:
             resp = await client.post(api_url, json=payload)
             result = resp.json()
-            logger.info(f"发送模板消息结果: {result}")
-            return result
+
+        # ✅ 核心修复：自动检测 token 过期，清空后重试一次
+        if result.get("errcode") == 42001:
+            logger.warning("检测到 access_token 过期，自动刷新并重试发送...")
+            self.access_token = None  # 清空旧token
+            self.token_expire_time = datetime.min
+            
+            # 重试发送
+            access_token = await self.get_access_token()
+            api_url = f"https://api.weixin.qq.com/cgi-bin/message/template/send?access_token={access_token}"
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(api_url, json=payload)
+                result = resp.json()
+
+        logger.info(f"发送模板消息结果: {result}")
+        return result
 
     async def send_analysis_result_notification(self, openid: str, task_id: str, symbol: str):
         if not openid:
             logger.warning("用户openid为空，不发送微信通知")
             return
 
-        # 真实当前时间
-        from datetime import datetime
         now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-
-        # ✅ 你最新的模板ID
         TEMPLATE_ID = "l0BxhG1_4TLJZw2SFtnVHo3qn-FuX81oj3m13vMIPqc"
 
-        # ✅ 100% 匹配你的新模板字段
         data = {
-            "thing2": {"value": f"股票分析 {symbol}"},  # 产品名称
-            "time5": {"value": now},                   # 完成时间
+            "thing2": {"value": f"股票分析 {symbol}"},
+            "time5": {"value": now},
         }
 
         jump_url = f"https://nbstockai.com/reports/view/{task_id}"
 
         logger.info(f"发送微信通知 → 用户：{openid}，股票：{symbol}")
-        logger.info(f"模板数据：{data}")
-
         return await self.send_template_msg(
             openid=openid,
             template_id=TEMPLATE_ID,
