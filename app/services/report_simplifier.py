@@ -306,7 +306,7 @@ class ReportSimplifier:
             self._cache[cache_key] = simplified_report
             
             # 12. 保存HTML到文件
-            await self._save_html_to_file(request.analysis_id, stock_code, html_content)
+            # await self._save_html_to_file(request.analysis_id, stock_code, html_content)
             
             logger.info(f"✅ 简化报告生成完成: {request.analysis_id}, 压缩比例: {compression_ratio:.2%}")
             return simplified_report
