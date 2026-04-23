@@ -15,7 +15,6 @@ from tradingagents.agents.utils.google_tool_handler import GoogleToolCallHandler
 
 logger = get_logger("analysts.news")
 
-
 def create_news_analyst(llm, toolkit):
     @log_analyst_module("news")
     def news_analyst_node(state):
@@ -97,7 +96,7 @@ def create_news_analyst(llm, toolkit):
         
         # 🔧 使用统一新闻工具，简化工具调用
         logger.info(f"[新闻分析师] 使用统一新闻工具，自动识别股票类型并获取相应新闻")
-   # 创建统一新闻工具
+        # 创建统一新闻工具
         unified_news_tool = create_unified_news_tool(toolkit)
         unified_news_tool.name = "get_stock_news_unified"
         
@@ -105,7 +104,15 @@ def create_news_analyst(llm, toolkit):
         logger.info(f"[新闻分析师] 已加载统一新闻工具: get_stock_news_unified")
 
         system_message = (
-            """您是一位专业的财经新闻分析师，负责分析最新的市场新闻和事件对股票价格的潜在影响。
+            """🚨【全行业通用·绝对强制常识风控红线 · 严禁脑补、严禁乱归属】
+1、严格恪守主体唯一原则：同篇新闻常会同时出现【目标上市公司、合作方、行业平台、竞品公司、上下游企业、生态品牌】，**绝不默认所有新闻内容都属于当前分析标的股票**。
+2、产品销量、车型订单、用户热度、业绩数据、爆款营收、市场份额，**只归属新闻原文明确标注所属公司**，禁止跨主体挪用、嫁接、套用利好。
+3、平台火热、行业景气、生态繁荣、战略合作、产业链联动，仅属于间接情绪利好，**绝对不能等同于上市公司自有订单、自有业绩、直接营收增长、自身产品竞争力**。
+4、严格区分权属关系：母公司业务≠子公司业务、上市公司自有产品≠合作方产品、集团赛道≠个股基本面、行业利好≠个股业绩利好。
+5、无明确利益传导关系，一律不强行关联因果：新闻提及爆款、热点、高热度，未写明归属当前公司，就不得作为该公司未来业绩支撑、成长逻辑、投资利好依据。
+6、不自行延伸、不脑补关联、不混淆股权与合作关系、不把生态热度等同于个股基本面利好。
+
+您是一位专业的财经新闻分析师，负责分析最新的市场新闻和事件对股票价格的潜在影响。
 
 您的主要职责包括：
 1. 获取和分析最新的实时新闻（优先15-30分钟内的新闻）
@@ -159,6 +166,8 @@ def create_news_analyst(llm, toolkit):
                     "\n- 绝对禁止基于推测或假设生成任何分析内容"
                     "\n- 绝对禁止跳过工具调用步骤"
                     "\n- 绝对禁止说'我无法获取实时数据'等借口"
+                    "\n- 绝对禁止跨公司、跨品牌、跨主体挪用订单、销量、产品热度美化个股利好"
+                    "\n- 绝对不默认行业热点、平台热度等同于当前上市公司自身业绩利好"
                     "\n"
                     "\n✅ 强制执行步骤："
                     "\n1. 您的第一个动作必须是调用 get_stock_news_unified 工具"
