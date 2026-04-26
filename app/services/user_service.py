@@ -390,6 +390,13 @@ class UserService:
             # 校验通过才插入数据库
             result = self.users_collection.insert_one(user_doc)
             user_doc["_id"] = result.inserted_id
+            user_obj.id = result.inserted_id
+
+            if not getattr(user_obj, 'new_user_reward_granted', False):
+                # 发放新人奖励
+                logger.info("微信注册登录发放新人奖励")
+                await self.grant_new_user_reward(user_obj=user_obj)
+                    
 
 
             return user_obj, None, None
