@@ -26,11 +26,7 @@ async def get_today_stats(admin=Depends(get_admin_user)):
     获取今日运营统计大盘
     包含：用户、日活、充值、报告生成次数
     """
-    stats = user_stat_service.get_today()
-
-    # 自动生成今日统计
-    if not stats:
-        stats = user_stat_service.generate_daily_stats()
+    stats = user_stat_service.generate_daily_stats()
 
     return {
         "success": True,
@@ -75,9 +71,7 @@ async def get_history_stats(
 @router.get("/dashboard", response_model=Dict[str, Any])
 async def get_admin_dashboard(admin=Depends(get_admin_user)):
     """管理员后台大盘数据"""
-    today = user_stat_service.get_today()
-    if not today:
-        today = user_stat_service.generate_daily_stats()
+    today = user_stat_service.generate_daily_stats()
 
     return {
         "success": True,
