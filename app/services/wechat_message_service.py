@@ -89,9 +89,9 @@ class WechatMessageService:
             "thing2": {"value": f"股票分析 {symbol}"},
             "time5": {"value": now},
         }
-
         # jump_url = f"https://nbstockai.com/reports/view/{task_id}"
-        jump_url = f"https://nbstockai.com/analysis/{task_id}"
+        jump_url = f"https://nbstockai.com/analysis/report/{task_id}?symbol={symbol}"
+        
         logger.info(f"发送微信通知 → 用户：{openid}，股票：{symbol}")
         return await self.send_template_msg(
             openid=openid,
