@@ -269,6 +269,7 @@ class UserService:
             result = await db.users.insert_one(user_doc)
             user = await db.users.find_one({"_id": result.inserted_id})
         else:
+            user.last_login = datetime.utcnow()
             cur_user = User(**user)
             if not getattr(cur_user, 'new_user_reward_granted', False):
                 # 发放新人奖励
