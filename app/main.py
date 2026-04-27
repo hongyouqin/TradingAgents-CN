@@ -796,7 +796,7 @@ app.include_router(news_data.router, tags=["news-data"])
 app.include_router(payment.router, tags=["payments"])
 app.include_router(social_media.router, tags=["social-media"])
 app.include_router(internal_messages.router, tags=["internal-messages"])
-app.include_router(admin_stats_api.router, prefix="/api", tags=["admin-stats"])
+app.include_router(admin_stats_api.router, prefix="/api", tags=["管理员-统计大盘"])
 
 
 @app.get("/")
