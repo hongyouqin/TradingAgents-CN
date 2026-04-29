@@ -48,12 +48,18 @@ class UserStatService:
         return self.users.count_documents({"created_at": {"$gte": s, "$lt": e}})
 
     def get_dau(self, date=None) -> int:
-        """日活 DAU"""
+        """日活 DAU：当天有登录记录的用户"""
         if not date:
             date = datetime.utcnow()
-        s = datetime(date.year, date.month, date.day, 0, 0, 0)
-        e = s + timedelta(days=1)
-        return self.users.count_documents({"last_login": {"$gte": s, "$lt": e}})
+        
+        # 当天 00:00:00
+        start = datetime(date.year, date.month, date.day, 0, 0, 0)
+        # 第二天 00:00:00
+        end = start + timedelta(days=1)
+
+        return self.users.count_documents({
+            "last_login": {"$gte": start, "$lt": end}
+        })
 
     def get_mau(self, date=None) -> int:
         """月活 MAU"""
@@ -144,6 +150,18 @@ class UserStatService:
             "status": "CONFIRMED",
             "created_at": {"$gte": s, "$lt": e}
         })
+        
+    async def update_last_login(self, user_id: str):
+        """更新用户最后登录时间（埋点用）"""
+        from bson import ObjectId
+        self.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "$set": {
+                    "last_login": datetime.utcnow()  # 🔥 必须用 $set
+                }
+            }
+        )
 
     # --------------------------------------------------------------------------
     # 4. 生成并保存每日统计

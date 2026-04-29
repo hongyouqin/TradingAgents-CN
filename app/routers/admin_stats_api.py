@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Any
 
@@ -87,4 +88,27 @@ async def get_admin_dashboard(admin=Depends(get_admin_user)):
                 "本月报告生成": today["monthly_reports"]
             }
         }
+    }
+    
+
+# ------------------------------
+# 🔥 登录埋点接口（前端每次打开APP/登录时调用）
+# ------------------------------
+@router.post("/track/login")
+async def track_user_login(user: dict = Depends(get_current_user)):
+    """
+    用户登录/打开APP埋点
+    作用：更新 last_login 字段，用于统计 DAU 日活
+    """
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="用户不存在")
+
+    # 🔥 核心：更新 last_login 为当前UTC时间
+    await user_stat_service.update_last_login(user_id)
+
+    return {
+        "success": True,
+        "message": "登录埋点成功",
+        "last_login": datetime.utcnow()
     }
