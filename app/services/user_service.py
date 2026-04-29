@@ -233,9 +233,9 @@ class UserService:
     async def wechat_qr_login(self, openid: str) -> User:
         '''微信扫码登录/注册'''
         db = get_database()
-        user = await db.users.find_one({"openid": openid})
+        user_dict = await db.users.find_one({"openid": openid})
 
-        if not user:
+        if not user_dict:
             # 生成用户名
             username = f"wx_{openid[-8:]}"
             while await db.users.find_one({"username": username}):
@@ -267,16 +267,25 @@ class UserService:
             }
 
             result = await db.users.insert_one(user_doc)
-            user = await db.users.find_one({"_id": result.inserted_id})
+            user_dict = await db.users.find_one({"_id": result.inserted_id})
+            user = User(**user_dict)
         else:
+            # 先转换为 User 对象
+            user = User(**user_dict)
             user.last_login = datetime.utcnow()
-            cur_user = User(**user)
-            if not getattr(cur_user, 'new_user_reward_granted', False):
+            
+            # 更新数据库中的 last_login
+            await db.users.update_one(
+                {"openid": openid},
+                {"$set": {"last_login": user.last_login}}
+            )
+            
+            if not getattr(user, 'new_user_reward_granted', False):
                 # 发放新人奖励
                 logger.info("微信扫码登录发放新人奖励")
-                await self.grant_new_user_reward(user_obj=cur_user)
+                await self.grant_new_user_reward(user_obj=user)
 
-        return User(**user)
+        return user
     
     async def wechat_auth_login(self, code: str) -> Tuple[Optional[User], Optional[str], Optional[str]]:
         try:
