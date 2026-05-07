@@ -79,10 +79,17 @@ class KanbanService:
         return self.safe_ak(ak.stock_zh_a_spot_em, "ak:spot", static=False)
 
     def get_zt_pool(self):
-        return self.safe_ak(ak.stock_zt_pool_em, "ak:zt", static=False)
+        return self.safe_ak(self._get_zt_pool, "ak:zt", static=False)
+
+    def _get_zt_pool(self):
+        df = ak.stock_zt_pool_em()
+        if not df.empty:
+            return df
+        print("⚠️ 当日无涨停，切换为昨日涨停池")
+        return ak.stock_zt_pool_previous_em()
 
     def get_sector_spot(self):
-        return self.safe_ak(ak.stock_sector_spot_em, "ak:sector:spot", static=False)
+        return self.safe_ak(ak.stock_board_industry_spot_em, "ak:sector:spot", static=False)
 
     # ===================== 核心计算（100% 不报错） =====================
     def get_market_sentiment(self) -> Dict:

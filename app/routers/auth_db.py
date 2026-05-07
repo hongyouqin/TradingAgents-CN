@@ -632,7 +632,7 @@ async def get_js_config(
 async def wechat_login(
     code: str,
     request: Request,
-    url: str = None,  # 改成可选，不传也不报错
+    url: str = None,
 ):
     ip_address = request.client.host if request.client else "unknown"
     logger.info(f"🌍 微信公众号登录请求: code={code[:10]}..., IP={ip_address}")
