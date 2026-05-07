@@ -17,7 +17,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.core.database import init_db, close_db
 from app.core.logging_config import setup_logging
-from app.routers import admin_stats_api, auth_db as auth, analysis, payment, screening, queue, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite
+from app.routers import admin_stats_api, auth_db as auth, analysis, kanban_router, payment, screening, queue, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite
 from app.routers import sync as sync_router, multi_source_sync
 from app.routers import stocks as stocks_router
 from app.routers import stock_data as stock_data_router
@@ -767,6 +767,7 @@ app.include_router(logs.router, prefix="/api/system", tags=["logs"])
 app.include_router(stock_pitch.router, prefix="/api", tags=["stock-pitches"])
 app.include_router(wechat_qrcode_invite.router, prefix="/api", tags=["微信公众号二维码邀请码"])
 app.include_router(wechat_official_account.router, prefix="/api", tags=["微信公众号相关操作"])
+app.include_router(kanban_router.router, prefix="/api")
 
 
 # 新增：系统配置只读摘要
