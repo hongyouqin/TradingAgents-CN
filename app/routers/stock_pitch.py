@@ -78,9 +78,9 @@ async def import_signals_with_deduplication(
         # 读取上传的文件内容
         contents = await file.read()
         
-        # 使用pandas读取Excel
+        # 使用pandas读取Excel，指定stock_code和date为字符串类型以保留前导0
         try:
-            df = pd.read_excel(io.BytesIO(contents))
+            df = pd.read_excel(io.BytesIO(contents), dtype={'stock_code': str, 'date': str})
             logger.info(f"成功读取Excel文件 {file.filename}，共 {len(df)} 条记录")
         except Exception as e:
             logger.error(f"读取Excel文件失败: {str(e)}")
@@ -143,6 +143,17 @@ async def import_signals_with_deduplication(
                 # 处理NaN和特殊类型
                 if pd.isna(value):
                     record[col] = None
+                elif col == 'stock_code':
+                    # 股票代码始终保持为字符串，确保前导0不丢失
+                    record[col] = str(value).strip()
+                elif col == 'date':
+                    # 日期字段保持为字符串格式
+                    if isinstance(value, str):
+                        record[col] = value
+                    elif isinstance(value, datetime):
+                        record[col] = value.strftime('%Y-%m-%d')
+                    else:
+                        record[col] = str(value)
                 elif isinstance(value, (pd.Timestamp, datetime)):
                     record[col] = value.strftime('%Y-%m-%d')
                 elif isinstance(value, (pd.Int64Dtype, pd.Float64Dtype)):
