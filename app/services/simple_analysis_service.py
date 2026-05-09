@@ -1093,7 +1093,7 @@ class SimpleAnalysisService:
                         type='analysis',
                         title=f"{request.stock_code}股票分析完成",
                         content=summary,
-                        link=f"{task_id}?symbol={stock_code}",
+                        link=f"analysis/report/{task_id}?symbol={stock_code}",
                         source='analysis'
                     )
                 )
