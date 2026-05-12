@@ -134,7 +134,7 @@ async def admin_give_compute_power(
         # 调用赠送服务
         from app.services.invite_reward_service import InviteRewardService
         reward_service = InviteRewardService(db)
-        success, msg = await reward_service.grant_manual_compute_power(user_obj=user, amount=amount)
+        success, msg = await reward_service.grant_manual_compute_power(user=user, amount=amount)
 
         # 日志
         if success:
