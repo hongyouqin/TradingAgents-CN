@@ -111,7 +111,7 @@ async def create_recharge_order(
 async def admin_give_compute_power(
     username: str,                # 根据用户名赠送
     amount: int,                  # 算力 1~50
-    current_admin: User = Depends(get_admin_user),
+    current_admin: dict = Depends(get_admin_user),  # 改成 dict
     db = Depends(get_database)
 ):
     """
@@ -121,8 +121,6 @@ async def admin_give_compute_power(
     # 强制校验算力范围
     if not (1 <= amount <= 50):
         raise HTTPException(status_code=400, detail="赠送算力必须在 1 ~ 50 之间")
-    if not current_admin.is_admin:
-        raise HTTPException(status_code=403, detail="无管理员权限")
 
     try:
         # -------------- 关键：按 username 获取 User 对象（完全按你的写法） --------------
@@ -140,7 +138,7 @@ async def admin_give_compute_power(
 
         # 日志
         if success:
-            logger.info(f"⚡ 管理员赠送算力成功 | 管理员:{current_admin.username} 用户:{username} 算力:{amount}")
+            logger.info(f"⚡ 管理员赠送算力成功 | 管理员:{current_admin['username']} 用户:{username} 算力:{amount}")
         else:
             logger.warning(f"⚠️ 管理员赠送算力失败 | 用户:{username} 原因:{msg}")
 
