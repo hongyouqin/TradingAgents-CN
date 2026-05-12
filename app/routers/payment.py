@@ -5,8 +5,10 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
+from app.core.database import get_database
 from app.models.prepare_payment_request import PreparePaymentRequest
 from app.models.user import User
+from app.routers.admin_stats_api import get_admin_user
 from app.routers.auth_db import get_current_user
 from app.services.user_service import user_service
 from app.services.wechat_pay_service import wechat_pay_service
@@ -102,6 +104,62 @@ async def create_recharge_order(
             "payment_scene": order["payment_scene"]
         }
     }
+
+
+# ==================== 管理员手动赠送算力（按 username） ====================
+@router.post("/admin/give-compute-power")
+async def admin_give_compute_power(
+    username: str,                # 根据用户名赠送
+    amount: int,                  # 算力 1~50
+    current_admin: User = Depends(get_admin_user),
+    db = Depends(get_database)
+):
+    """
+    管理员手动给用户赠送算力
+    限制：1 ~ 50
+    """
+    # 强制校验算力范围
+    if not (1 <= amount <= 50):
+        raise HTTPException(status_code=400, detail="赠送算力必须在 1 ~ 50 之间")
+    if not current_admin.is_admin:
+        raise HTTPException(status_code=403, detail="无管理员权限")
+
+    try:
+        # -------------- 关键：按 username 获取 User 对象（完全按你的写法） --------------
+        user_doc = await db["users"].find_one({"username": username})
+        if not user_doc:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        
+        # 转换为 User 对象（和你登录时的代码完全一致）
+        user = User(**user_doc)
+
+        # 调用赠送服务
+        from app.services.invite_reward_service import InviteRewardService
+        reward_service = InviteRewardService(db)
+        success, msg = await reward_service.grant_manual_compute_power(user_obj=user, amount=amount)
+
+        # 日志
+        if success:
+            logger.info(f"⚡ 管理员赠送算力成功 | 管理员:{current_admin.username} 用户:{username} 算力:{amount}")
+        else:
+            logger.warning(f"⚠️ 管理员赠送算力失败 | 用户:{username} 原因:{msg}")
+
+        # 返回格式和你的充值接口完全一致
+        return {
+            "code": 0 if success else 400,
+            "message": msg,
+            "data": {
+                "username": username,
+                "compute_power": amount,
+                "success": success
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 管理员赠送算力接口异常: {e}")
+        raise HTTPException(status_code=500, detail="赠送算力失败，服务异常")
 
 # ==================== 准备支付 ====================
 @router.post("/recharge/{order_no}/prepare")

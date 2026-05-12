@@ -84,6 +84,40 @@ class InviteRewardService:
             logger.error(f"发放新用户奖励失败: {e}", exc_info=True)
             return False, f"发放奖励失败: {str(e)}"
 
+    async def grant_manual_compute_power(self, user: User, amount: int) -> Tuple[bool, str]:
+        """
+        管理员手动赠送算力（通过 power_account_service.recharge 实现）
+        完全对齐新用户奖励发放逻辑
+        """
+        try:
+            logger.info(f"⚡ 开始手动赠送算力: 用户={user.id}, 赠送算力={amount}")
+
+            # 1. 生成手动赠送订单号（和新用户逻辑保持一致）
+            order_no = self._generate_order_no(str(user.id), "MANUAL_GIFT", amount)
+
+            # 2. 通过算力账户服务充值（核心：完全照搬你的实现方式）
+            success, msg = await power_account_service.recharge(
+                user=user,
+                order_no=order_no,
+                amount=amount,
+                description=f"管理员手动赠送 {amount} 算力",
+                metadata={
+                    "reward_type": "manual_gift",
+                    "operator": "admin"
+                }
+            )
+
+            if not success:
+                logger.error(f"❌ 手动赠送算力失败: {msg}")
+                return False, msg
+
+            logger.info(f"✅ 手动赠送算力成功: 用户={user.id}, 算力={amount}")
+            return True, f"赠送成功！已到账 {amount} 算力"
+
+        except Exception as e:
+            logger.error(f"❌ 手动赠送算力异常: {e}", exc_info=True)
+            return False, f"赠送失败: {str(e)}"
+
     # ============================
     # 【新增】二维码扫码绑定奖励
     # 给微信自动关注绑定使用
