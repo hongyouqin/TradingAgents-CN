@@ -269,6 +269,11 @@ class UserService:
             result = await db.users.insert_one(user_doc)
             user_dict = await db.users.find_one({"_id": result.inserted_id})
             user = User(**user_dict)
+            if not getattr(user, 'new_user_reward_granted', False):
+                # 发放新人奖励
+                logger.info("微信扫码登录发放新人奖励")
+                await self.grant_new_user_reward(user_obj=user)
+            
         else:
             # 先转换为 User 对象
             user = User(**user_dict)
