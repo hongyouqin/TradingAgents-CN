@@ -9,8 +9,9 @@ from app.services.sign_service import SignService
 router = APIRouter(prefix="/sign", tags=["签到"])
 
 @router.post("/submit")
-async def submit_sign(db = Depends(get_database), current_user=Depends(get_current_user)):
-    user_id = getattr(current_user, 'id', None) or getattr(current_user, 'user_id', None) or str(current_user)
+async def submit_sign(db = Depends(get_database), current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user.get('id') or current_user.get('user_id') or current_user.get('_id'))
+    
     svc = SignService(db, power_account_service)
     await svc.init()
     try:
@@ -20,12 +21,23 @@ async def submit_sign(db = Depends(get_database), current_user=Depends(get_curre
     return {"success": True, "data": result, "message": ""}
 
 @router.get("/status")
-async def status(db = Depends(get_database), current_user=Depends(get_current_user)):
-    user_id = getattr(current_user, 'id', None) or getattr(current_user, 'user_id', None) or str(current_user)
+async def status(db = Depends(get_database), current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user.get('id') or current_user.get('user_id') or current_user.get('_id'))
+    
     svc = SignService(db, power_account_service)
     await svc.init()
     has_signed = await svc.has_signed_today(user_id)
+    
     current_power = None
     if hasattr(power_account_service, 'get_balance'):
         current_power = await power_account_service.get_balance(user_id)
-    return {"success": True, "data": {"has_signed": has_signed, "can_sign_today": not has_signed, "current_power": current_power}, "message": ""}
+    
+    return {
+        "success": True, 
+        "data": {
+            "has_signed": has_signed, 
+            "can_sign_today": not has_signed, 
+            "current_power": current_power
+        }, 
+        "message": ""
+    }
