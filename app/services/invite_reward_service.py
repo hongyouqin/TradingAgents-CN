@@ -118,11 +118,80 @@ class InviteRewardService:
             logger.error(f"❌ 手动赠送算力异常: {e}", exc_info=True)
             return False, f"赠送失败: {str(e)}"
 
+    async def recharge_for_sign(self, user_id: str, amount: float = 1.5, sign_date: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        给签到使用的充值封装：按签到场景生成订单号并通过 power_account_service.recharge 充值。
+        该函数内部会读取用户文档并在充值成功后更新用户的签到统计（sign_rewards）。
+        """
+        try:
+            logger.info(f"🔔 发放签到奖励: 用户={user_id}, 算力={amount}")
+
+            # 1. 获取用户文档
+            user_doc = await self.users_collection.find_one({"_id": ObjectId(user_id)})
+            if not user_doc:
+                return False, "用户不存在"
+
+            # 2. 构造 User 对象
+            from app.models.user import User
+            user_obj = User(**user_doc)
+
+            # 3. 生成订单号
+            order_no = self._generate_order_no(str(user_obj.id), "DAILY_SIGN", int(amount))
+
+            # 4. 调用算力账户服务充值
+            description = f"每日签到奖励 {amount} 算力"
+            metadata = {
+                "reward_type": "daily_sign",
+            }
+            if sign_date:
+                metadata["sign_date"] = str(sign_date)
+
+            success, msg = await power_account_service.recharge(
+                user=user_obj,
+                order_no=order_no,
+                amount=amount,
+                description=description,
+                metadata=metadata
+            )
+
+            if not success:
+                logger.error(f"❌ 签到充值失败: 用户={user_id}, msg={msg}")
+                return False, msg
+
+            # 5. 更新用户的签到统计（可选字段结构）
+            try:
+                await self.users_collection.update_one(
+                    {"_id": ObjectId(user_id)},
+                    {
+                        "$inc": {
+                            "sign_rewards.total_signs": 1,
+                            "sign_rewards.total_reward_power": float(amount)
+                        },
+                        "$push": {
+                            "sign_rewards.signs": {
+                                "date": datetime.utcnow(),
+                                "amount": float(amount)
+                            }
+                        }
+                    }
+                )
+            except Exception:
+                # 更新统计失败不影响已充值的核心流程，仅记录日志
+                logger.exception(f"⚠️ 签到统计更新失败: 用户={user_id}")
+
+            logger.info(f"✅ 签到充值成功: 用户={user_id}, 算力={amount}")
+            return True, f"签到成功，获得 {amount} 算力"
+
+        except Exception as e:
+            logger.error(f"❌ 签到充值异常: {e}", exc_info=True)
+            return False, str(e)
+
     # ============================
     # 【新增】二维码扫码绑定奖励
     # 给微信自动关注绑定使用
     # ============================
     async def grant_invite_reward_by_qrcode(self, inviter_id: str, new_user_id: str) -> Tuple[bool, str]:
+
         """
         扫码关注公众号自动绑定邀请后 → 给邀请人发奖励
         """
