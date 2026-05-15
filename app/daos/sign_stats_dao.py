@@ -19,10 +19,14 @@ async def increment_sign_count(db: AsyncIOMotorDatabase, stat_date: date):
         upsert=True,
     )
 
-async def get_sign_count(db: AsyncIOMotorDatabase, stat_date: date) -> int:
-    if hasattr(stat_date, "isoformat"):
-        date_key = stat_date.isoformat()
+async def get_sign_count(db: AsyncIOMotorDatabase, stat_date) -> int:
+    if hasattr(stat_date, "strftime"):
+        date_key = stat_date.strftime("%Y-%m-%d")
     else:
-        date_key = str(stat_date)
+        date_key = str(stat_date).strip()
+
+    print(f"[查询] stat_date = {stat_date}")
+    print(f"[查询] 最终匹配MongoDB的key = {date_key}")
+
     doc = await db[COLLECTION].find_one({"stat_date": date_key})
     return int(doc.get("count", 0)) if doc else 0
