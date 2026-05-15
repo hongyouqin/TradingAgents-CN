@@ -4,6 +4,7 @@ from typing import Dict, Any
 
 from app.routers.auth_db import get_current_user
 from app.services.user_status_service import user_stat_service
+from app.core.database import get_database
 
 router = APIRouter(prefix="/admin/stats", tags=["管理员-统计大盘"])
 
@@ -112,3 +113,16 @@ async def track_user_login(user: dict = Depends(get_current_user)):
         "message": "登录埋点成功",
         "last_login": datetime.utcnow()
     }
+
+
+@router.get("/sign/today")
+async def get_today_sign_count(db = Depends(get_database), admin=Depends(get_admin_user)):
+    """
+    获取今日签到人数统计（UTC 日期）
+    """
+    from app.daos.sign_stats_dao import get_sign_count, ensure_indexes as ensure_stats_indexes
+    await ensure_stats_indexes(db)
+    from datetime import datetime as _dt
+    stat_date = _dt.utcnow().date()
+    count = await get_sign_count(db, stat_date)
+    return {"success": True, "data": {"date": stat_date.isoformat(), "sign_count": count}}

@@ -4,6 +4,7 @@ import pymongo
 
 from app.daos.sign_dao import has_signed, insert_sign, ensure_indexes
 from app.services.power_account_service import PowerAccountService
+from app.daos import sign_stats_dao
 
 # 赠送的算力数量
 SIGN_REWARD = 1.5
@@ -30,6 +31,11 @@ class SignService:
         now = datetime.now(timezone.utc)
         try:
             await insert_sign(self.db, user_id, sd, now)
+            # 更新当日签到统计（尽力而为，不影响主流程）
+            try:
+                await sign_stats_dao.increment_sign_count(self.db, sd)
+            except Exception:
+                pass
         except pymongo.errors.DuplicateKeyError:
             # already signed by another concurrent request
             current_power = None
