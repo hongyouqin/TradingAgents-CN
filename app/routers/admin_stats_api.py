@@ -119,10 +119,11 @@ async def track_user_login(user: dict = Depends(get_current_user)):
 async def get_today_sign_count(db = Depends(get_database), admin=Depends(get_admin_user)):
     """
     获取今日签到人数统计（UTC 日期）
+    使用 sign_records 表按 sign_date 字符串统计，避免时区/格式问题
     """
-    from app.daos.sign_stats_dao import get_sign_count, ensure_indexes as ensure_stats_indexes
-    await ensure_stats_indexes(db)
     from datetime import datetime as _dt
     stat_date = _dt.utcnow().date()
-    count = await get_sign_count(db, stat_date)
-    return {"success": True, "data": {"date": stat_date.isoformat(), "sign_count": count}}
+    date_key = stat_date.isoformat()
+    # sign_records 表中的 sign_date 字段存储为 ISO 日期字符串（YYYY-MM-DD）
+    count = await db["sign_records"].count_documents({"sign_date": date_key})
+    return {"success": True, "data": {"date": date_key, "sign_count": int(count)}}
