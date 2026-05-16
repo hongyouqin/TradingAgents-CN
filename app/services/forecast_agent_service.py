@@ -19,7 +19,7 @@ class ForecastAgentService:
         self.sectorer = SectorAgent()
         self.outputer = OutputAgent()
 
-    async def run_for_date(self, date_key: Optional[str] = None, save: bool = True) -> dict:
+    async def run_for_date(self, date_key: Optional[str] = None, save: bool = True, user: dict = None) -> dict:
         if date_key is None:
             date_key = datetime.utcnow().date().isoformat()
 
@@ -43,8 +43,8 @@ class ForecastAgentService:
         sector_task = asyncio.create_task(self.sectorer.run(ctx))
         emotion, sector = await asyncio.gather(emotion_task, sector_task)
 
-        # 3. output
-        forecast = await self.outputer.run(ctx, emotion, sector)
+        # 3. output (pass user for LLM billing context)
+        forecast = await self.outputer.run(ctx, emotion, sector, user=user)
 
         if save:
             try:

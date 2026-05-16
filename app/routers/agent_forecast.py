@@ -79,10 +79,10 @@ async def trigger_pipeline_and_agents(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"pipeline run failed: {e}")
 
-    # run agents to generate forecast
+    # run agents to generate forecast (pass admin user for LLM billing context)
     try:
         agent_service = get_forecast_agent_service(db)
-        forecast = await agent_service.run_for_date(target_date, save=True)
+        forecast = await agent_service.run_for_date(target_date, save=True, user=admin)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"agent run failed: {e}")
 

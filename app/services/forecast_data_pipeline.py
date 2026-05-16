@@ -237,23 +237,102 @@ class ForecastDataPipeline:
             return {"note": "error", "error": str(e)}
 
     async def fetch_sector_data(self, db, date_key: str) -> dict:
-        """Aggregate performance by industry/sector using stock_basic_info join."""
+        """Aggregate performance by industry/sector using stock_basic_info join.
+
+        Fallback strategy:
+        1) Try $lookup with stock_basic_info on "code" field (primary).
+        2) If no results or join yields only null industries, try joining on "symbol" field.
+        3) If still empty, aggregate top gainers/losers and flag as "no_industry_field" 
+           so downstream agents can derive sector insights from individual stocks.
+        """
         try:
             coll = db["stock_daily_quotes"]
             match = self._trade_date_query(date_key)
-            pipeline = [
-                {"$match": match},
-                {"$lookup": {"from": "stock_basic_info", "localField": "code", "foreignField": "code", "as": "basic"}}, 
-                {"$unwind": {"path": "$basic", "preserveNullAndEmptyArrays": True}},
-                {"$group": {"_id": "$basic.industry", "avg_pct": {"$avg": "$pct_chg"}, "sum_amount": {"$sum": {"$ifNull": ["$amount", 0]}}, "count": {"$sum": 1}}},
-                {"$sort": {"sum_amount": -1}},
-                {"$limit": 30}
-            ]
-            res = await coll.aggregate(pipeline).to_list(length=30)
+
+            # Quick check: does stock_basic_info exist?
+            names = await db.list_collection_names()
+            has_basic_info = "stock_basic_info" in names
+
             sectors = []
-            for r in res:
-                sectors.append({"industry": r.get("_id") or "未知", "avg_pct": float(r.get("avg_pct") or 0), "sum_amount": float(r.get("sum_amount") or 0), "count": int(r.get("count") or 0)})
-            return {"date": date_key, "top_sectors": sectors, "note": "aggregated_by_industry"}
+            note = "aggregated_by_industry"
+
+            if has_basic_info:
+                # Attempt primary lookup on "code"
+                pipeline = [
+                    {"$match": match},
+                    {"$lookup": {"from": "stock_basic_info", "localField": "code", "foreignField": "code", "as": "basic"}},
+                    {"$unwind": {"path": "$basic", "preserveNullAndEmptyArrays": True}},
+                    {"$group": {"_id": "$basic.industry", "avg_pct": {"$avg": "$pct_chg"}, "sum_amount": {"$sum": {"$ifNull": ["$amount", 0]}}, "count": {"$sum": 1}}},
+                    {"$sort": {"sum_amount": -1}},
+                    {"$limit": 30}
+                ]
+                res = await coll.aggregate(pipeline).to_list(length=30)
+                for r in res:
+                    industry = r.get("_id")
+                    if industry:  # only include non-null industries
+                        sectors.append({
+                            "industry": str(industry),
+                            "avg_pct": float(r.get("avg_pct") or 0),
+                            "sum_amount": float(r.get("sum_amount") or 0),
+                            "count": int(r.get("count") or 0)
+                        })
+
+                # Fallback: if primary lookup returned few/no sectors, try "symbol" field
+                if len(sectors) < 3:
+                    pipeline2 = [
+                        {"$match": match},
+                        {"$lookup": {"from": "stock_basic_info", "localField": "symbol", "foreignField": "code", "as": "basic"}},
+                        {"$unwind": {"path": "$basic", "preserveNullAndEmptyArrays": True}},
+                        {"$group": {"_id": "$basic.industry", "avg_pct": {"$avg": "$pct_chg"}, "sum_amount": {"$sum": {"$ifNull": ["$amount", 0]}}, "count": {"$sum": 1}}},
+                        {"$sort": {"sum_amount": -1}},
+                        {"$limit": 30}
+                    ]
+                    res2 = await coll.aggregate(pipeline2).to_list(length=30)
+                    seen = {s["industry"] for s in sectors}
+                    for r in res2:
+                        industry = r.get("_id")
+                        if industry and str(industry) not in seen:
+                            sectors.append({
+                                "industry": str(industry),
+                                "avg_pct": float(r.get("avg_pct") or 0),
+                                "sum_amount": float(r.get("sum_amount") or 0),
+                                "count": int(r.get("count") or 0)
+                            })
+
+                # Re-sort by sum_amount desc
+                sectors.sort(key=lambda x: x["sum_amount"], reverse=True)
+                sectors = sectors[:30]
+
+                if not sectors:
+                    note = "no_industry_in_stock_basic_info"
+            else:
+                note = "stock_basic_info_collection_missing"
+
+            # Final fallback: if no sectors, provide top individual stocks as context
+            if not sectors:
+                note = note + "|fallback_top_stocks_provided"
+                top_stocks = await coll.find(
+                    match,
+                    {"_id": 0, "code": 1, "name": 1, "pct_chg": 1, "amount": 1}
+                ).sort([("pct_chg", -1), ("amount", -1)]).limit(20).to_list(length=20)
+
+                # Also get top losers for balance
+                top_losers = await coll.find(
+                    match,
+                    {"_id": 0, "code": 1, "name": 1, "pct_chg": 1, "amount": 1}
+                ).sort([("pct_chg", 1), ("amount", -1)]).limit(10).to_list(length=10)
+
+                return {
+                    "date": date_key,
+                    "top_sectors": [],
+                    "top_stocks_fallback": {
+                        "gainers": [{"code": s.get("code"), "name": s.get("name"), "pct_chg": s.get("pct_chg")} for s in top_stocks],
+                        "losers": [{"code": s.get("code"), "name": s.get("name"), "pct_chg": s.get("pct_chg")} for s in top_losers]
+                    },
+                    "note": note
+                }
+
+            return {"date": date_key, "top_sectors": sectors, "note": note}
         except Exception as e:
             logger.exception(f"fetch_sector_data failed: {e}")
             return {"note": "error", "error": str(e)}
