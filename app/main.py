@@ -17,7 +17,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.core.database import init_db, close_db
 from app.core.logging_config import setup_logging
-from app.routers import admin_stats_api, auth_db as auth, analysis, kanban_router, payment, screening, queue, sign_router, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tet, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite
+from app.routers import admin_stats_api, auth_db as auth, analysis, kanban_router, payment, screening, queue, sign_router, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tet, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite, agent_forecast as agent_forecast_router
 from app.routers import sync as sync_router, multi_source_sync
 from app.routers import stocks as stocks_router
 from app.routers import stock_data as stock_data_router
@@ -382,6 +382,46 @@ async def lifespan(app: FastAPI):
 
         # Tushare统一数据同步任务配置
         logger.info(f"🔄 配置Tushare统一数据同步任务... 总开关= {settings.TUSHARE_UNIFIED_ENABLED}")
+
+        # ================= Forecast daily pipeline =================
+        async def run_forecast_full():
+            try:
+                from app.services.forecast_data_pipeline import get_forecast_pipeline
+                from app.services.forecast_agent_service import get_forecast_agent_service
+                from app.core.database import get_mongo_db
+
+                db_local = get_mongo_db()
+                pipeline_local = get_forecast_pipeline()
+                target_date_local = datetime.utcnow().date().isoformat()
+                # pipeline: gather and save daily_market_data
+                await pipeline_local.run_daily_pipeline(db_local, target_date_local)
+                # agents: generate and save tomorrow_forecast
+                agent_service_local = get_forecast_agent_service(db_local)
+                await agent_service_local.run_for_date(target_date_local, save=True)
+            except Exception as e:
+                logging.getLogger('app.main').exception(f"Scheduled forecast job failed: {e}")
+
+        # Schedule main post-close run at 16:00 local time and supplement at 02:00
+        try:
+            scheduler.add_job(
+                run_forecast_full,
+                CronTrigger(hour=16, minute=0, timezone=settings.TIMEZONE),
+                id="forecast_daily_pipeline",
+                name="Forecast daily pipeline (post-close)",
+                replace_existing=True
+            )
+            scheduler.add_job(
+                run_forecast_full,
+                CronTrigger(hour=2, minute=0, timezone=settings.TIMEZONE),
+                id="forecast_daily_pipeline_nightly",
+                name="Forecast nightly supplement",
+                replace_existing=True
+            )
+            logging.getLogger('app.main').info("📅 Forecast daily pipeline scheduled: 16:00 and 02:00")
+        except Exception as e:
+            logging.getLogger('app.main').warning(f"Failed to schedule forecast jobs: {e}")
+
+
 
         # 基础信息同步任务
         scheduler.add_job(
@@ -748,6 +788,7 @@ async def test_log():
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
+app.include_router(agent_forecast_router.router, prefix="/api", tags=["agent-forecast"])
 app.include_router(reports.router, tags=["reports"])
 app.include_router(screening.router, prefix="/api/screening", tags=["screening"])
 app.include_router(queue.router, prefix="/api/queue", tags=["queue"])

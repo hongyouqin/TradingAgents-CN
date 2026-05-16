@@ -362,6 +362,24 @@ async def create_database_indexes(db):
         await market_quotes.create_index([("amount", -1)])
         await market_quotes.create_index([("updated_at", -1)])
 
+        # 新增：明日前瞻所需集合索引
+        daily_market = db["daily_market_data"]
+        # 按日期唯一，便于每日入库去重
+        await daily_market.create_index([("date", 1)], unique=True, name="daily_date_unique")
+        # 创建 TTL，默认保留 365 天（可调）
+        try:
+            await daily_market.create_index([("create_time", 1)], expireAfterSeconds=365*24*3600, name="daily_ttl")
+        except Exception:
+            # 某些环境可能不允许创建 TTL 或 create_time 字段不存在，忽略错误
+            pass
+
+        forecast_col = db["tomorrow_forecast"]
+        await forecast_col.create_index([("date", 1)], unique=True, name="forecast_date_unique")
+        try:
+            await forecast_col.create_index([("create_time", 1)], expireAfterSeconds=365*24*3600, name="forecast_ttl")
+        except Exception:
+            pass
+
         logger.info("✅ 数据库索引创建完成")
 
     except Exception as e:
