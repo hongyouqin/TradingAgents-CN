@@ -17,7 +17,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.core.database import init_db, close_db
 from app.core.logging_config import setup_logging
-from app.routers import admin_stats_api, auth_db as auth, analysis, kanban_router, payment, screening, queue, sign_router, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tet, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite, agent_forecast as agent_forecast_router
+from app.routers import admin_stats_api, auth_db as auth, analysis, kanban_router, payment, screening, queue, sign_router, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tet, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite, agent_forecast as agent_forecast_router, report_template as report_template_router
 from app.routers import sync as sync_router, multi_source_sync
 from app.routers import stocks as stocks_router
 from app.routers import stock_data as stock_data_router
@@ -784,12 +784,20 @@ async def test_log():
     print("🧪 测试端点被调用 - 这条消息应该出现在控制台")
     return {"message": "测试成功", "timestamp": time.time()}
 
+# Serve report template images (public)
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path as _Path
+_report_dir = _Path(__file__).parent.parent / "web" / "data" / "report_templates"
+_report_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/report-templates", StaticFiles(directory=str(_report_dir)), name="report-templates")
+
 # 注册路由
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(agent_forecast_router.router, prefix="/api", tags=["agent-forecast"])
 app.include_router(reports.router, tags=["reports"])
+app.include_router(report_template_router.router, prefix="/api", tags=["report-template"])
 app.include_router(screening.router, prefix="/api/screening", tags=["screening"])
 app.include_router(queue.router, prefix="/api/queue", tags=["queue"])
 app.include_router(favorites.router, prefix="/api", tags=["favorites"])
