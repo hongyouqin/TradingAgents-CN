@@ -195,14 +195,16 @@ async def get_chart_click_stats(
     admin=Depends(get_admin_user)
 ):
     """
-    获取 TET 图表点击统计汇总（管理员专用）
+    获取 TET 点击/回测统计汇总（管理员专用）
 
     返回:
-    - total_clicks: 总点击数
-    - today_clicks: 今日点击数
-    - top_stocks: 点击最多的股票 Top 10
-    - top_users: 点击最多的用户 Top 10
-    - daily_trend: 每日点击趋势
+    - total_chart_clicks: 图表总点击数
+    - total_backtest_clicks: 回测总点击数
+    - today_chart_clicks: 今日图表点击数
+    - today_backtest_clicks: 今日回测点击数
+    - top_stocks: 操作最多的股票 Top 10
+    - top_users: 操作最多的用户 Top 10
+    - daily_trend: 每日操作趋势（含图表和回测两种类型）
     """
     try:
         db_sync = get_mongo_db_sync()
@@ -215,26 +217,39 @@ async def get_chart_click_stats(
         today_start = datetime(now.year, now.month, now.day, 0, 0, 0)
         tomorrow_start = today_start + timedelta(days=1)
 
-        # 总点击数
-        total_clicks = collection.count_documents({
+        # ——— 图表点击数 ———
+        total_chart_clicks = collection.count_documents({
             "event_type": "tet_chart_click"
         })
-
-        # 今日点击数
-        today_clicks = collection.count_documents({
+        today_chart_clicks = collection.count_documents({
             "event_type": "tet_chart_click",
             "created_at": {"$gte": today_start, "$lt": tomorrow_start}
         })
-
-        # 近N天点击数
-        period_clicks = collection.count_documents({
+        period_chart_clicks = collection.count_documents({
             "event_type": "tet_chart_click",
             "created_at": {"$gte": since}
         })
 
-        # 点击最多的股票 Top 10
+        # ——— 回测点击数 ———
+        total_backtest_clicks = collection.count_documents({
+            "event_type": "tet_backtest_click"
+        })
+        today_backtest_clicks = collection.count_documents({
+            "event_type": "tet_backtest_click",
+            "created_at": {"$gte": today_start, "$lt": tomorrow_start}
+        })
+        period_backtest_clicks = collection.count_documents({
+            "event_type": "tet_backtest_click",
+            "created_at": {"$gte": since}
+        })
+
+        # ——— 总操作数（图表+回测） ———
+        total_clicks = total_chart_clicks + total_backtest_clicks
+        period_clicks = period_chart_clicks + period_backtest_clicks
+
+        # 操作最多的股票 Top 10（合并图表和回测）
         top_stocks_pipeline = [
-            {"$match": {"event_type": "tet_chart_click", "stock_code": {"$ne": ""}}},
+            {"$match": {"event_type": {"$in": ["tet_chart_click", "tet_backtest_click"]}, "stock_code": {"$ne": ""}}},
             {"$group": {"_id": "$stock_code", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": 10}
@@ -242,9 +257,9 @@ async def get_chart_click_stats(
         top_stocks = list(collection.aggregate(top_stocks_pipeline))
         top_stocks = [{"stock_code": item["_id"], "count": item["count"]} for item in top_stocks]
 
-        # 点击最多的用户 Top 10
+        # 操作最多的用户 Top 10（合并图表和回测）
         top_users_pipeline = [
-            {"$match": {"event_type": "tet_chart_click", "username": {"$ne": ""}}},
+            {"$match": {"event_type": {"$in": ["tet_chart_click", "tet_backtest_click"]}, "username": {"$ne": ""}}},
             {"$group": {"_id": {"user_id": "$user_id", "username": "$username"}, "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": 10}
@@ -259,30 +274,53 @@ async def get_chart_click_stats(
             for item in top_users_raw
         ]
 
-        # 每日点击趋势（近N天）
+        # 每日操作趋势（近N天，按事件类型细分）
         daily_trend_pipeline = [
             {
                 "$match": {
-                    "event_type": "tet_chart_click",
+                    "event_type": {"$in": ["tet_chart_click", "tet_backtest_click"]},
                     "created_at": {"$gte": since}
                 }
             },
             {
                 "$group": {
-                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+                    "_id": {
+                        "date": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+                        "event_type": "$event_type"
+                    },
                     "count": {"$sum": 1}
                 }
             },
-            {"$sort": {"_id": 1}}
+            {"$sort": {"_id.date": 1}}
         ]
-        daily_trend = list(collection.aggregate(daily_trend_pipeline))
-        daily_trend = [{"date": item["_id"], "count": item["count"]} for item in daily_trend]
+        daily_trend_raw = list(collection.aggregate(daily_trend_pipeline))
+
+        # 将趋势数据按日期聚合
+        daily_trend_map = {}
+        for item in daily_trend_raw:
+            date = item["_id"]["date"]
+            etype = item["_id"]["event_type"]
+            cnt = item["count"]
+            if date not in daily_trend_map:
+                daily_trend_map[date] = {"date": date, "chart_clicks": 0, "backtest_clicks": 0, "total": 0}
+            if etype == "tet_chart_click":
+                daily_trend_map[date]["chart_clicks"] = cnt
+            elif etype == "tet_backtest_click":
+                daily_trend_map[date]["backtest_clicks"] = cnt
+            daily_trend_map[date]["total"] += cnt
+
+        daily_trend = sorted(daily_trend_map.values(), key=lambda x: x["date"])
 
         return {
             "success": True,
             "data": {
+                "total_chart_clicks": total_chart_clicks,
+                "total_backtest_clicks": total_backtest_clicks,
                 "total_clicks": total_clicks,
-                "today_clicks": today_clicks,
+                "today_chart_clicks": today_chart_clicks,
+                "today_backtest_clicks": today_backtest_clicks,
+                "period_chart_clicks": period_chart_clicks,
+                "period_backtest_clicks": period_backtest_clicks,
                 "period_clicks": period_clicks,
                 "period_days": days,
                 "top_stocks": top_stocks,

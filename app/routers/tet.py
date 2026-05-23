@@ -217,6 +217,7 @@ def _fetch_hs300_df(pro, start: str, end: str) -> pd.DataFrame:
 # ==============================
 @router.get("/backtest", summary="单股票 TET 策略回测")
 def get_tet_backtest(
+    request: Request,
     stock_code: str = Query(..., description="股票代码，如 002491"),
     start_date: str = Query(..., description="开始日期 2025-01-01"),
     end_date: str = Query(..., description="结束日期 2026-05-08"),
@@ -252,6 +253,27 @@ def get_tet_backtest(
 
         # 执行回测
         result = tet.backtest(plot=False, return_equity_curve=return_equity_curve)
+
+        # ✅ 记录埋点（不阻塞响应）
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
+
+            db_sync = get_mongo_db_sync()
+            db_sync["tracking_events"].insert_one({
+                "event_type": "tet_backtest_click",
+                "user_id": "",
+                "username": "anonymous",
+                "stock_code": stock_code,
+                "start_date": start_date,
+                "end_date": end_date,
+                "ip": client_ip,
+                "created_at": datetime.utcnow()
+            })
+        except Exception as track_err:
+            logger.warning(f"⚠️ TET backtest 埋点记录失败: {track_err}")
 
         return ok(data=result, message="TET策略回测完成")
 
