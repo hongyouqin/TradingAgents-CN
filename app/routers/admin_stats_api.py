@@ -1,10 +1,10 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
-from typing import Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, logger
+from typing import Dict, Any, Optional
 
 from app.routers.auth_db import get_current_user
 from app.services.user_status_service import user_stat_service
-from app.core.database import get_database
+from app.core.database import get_database, get_mongo_db_sync
 
 router = APIRouter(prefix="/admin/stats", tags=["管理员-统计大盘"])
 
@@ -127,3 +127,169 @@ async def get_today_sign_count(db = Depends(get_database), admin=Depends(get_adm
     # sign_records 表中的 sign_date 字段存储为 ISO 日期字符串（YYYY-MM-DD）
     count = await db["sign_records"].count_documents({"sign_date": date_key})
     return {"success": True, "data": {"date": date_key, "sign_count": int(count)}}
+
+
+# ==============================================
+# 🔥 埋点：用户图表点击统计
+# ==============================================
+@router.post("/track/chart-click")
+async def track_chart_click(
+    request: Request,
+    payload: Dict[str, Any],
+    user: dict = Depends(get_current_user)
+):
+    """
+    埋点记录：用户点击 TET 图表时的行为
+
+    请求体示例:
+    {
+        "event_type": "tet_chart_click",
+        "stock_code": "002491",
+        "start_date": "2025-01-01",
+        "end_date": "2026-05-08"
+    }
+    """
+    try:
+        user_id = user.get("id")
+        username = user.get("username", "unknown")
+        event_type = payload.get("event_type", "tet_chart_click")
+        stock_code = payload.get("stock_code", "")
+        start_date = payload.get("start_date", "")
+        end_date = payload.get("end_date", "")
+
+        # 获取客户端 IP
+        client_ip = request.client.host if request.client else "unknown"
+        # 尝试从 X-Forwarded-For 获取真实 IP
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+
+        # 记录到 MongoDB（同步方式）
+        db_sync = get_mongo_db_sync()
+        db_sync["tracking_events"].insert_one({
+            "event_type": event_type,
+            "user_id": user_id,
+            "username": username,
+            "stock_code": stock_code,
+            "start_date": start_date,
+            "end_date": end_date,
+            "ip": client_ip,
+            "created_at": datetime.utcnow()
+        })
+
+        return {
+            "success": True,
+            "message": "埋点记录成功"
+        }
+    except Exception as e:
+        logger.error(f"❌ 埋点记录异常: {e}")
+        raise HTTPException(status_code=500, detail=f"埋点记录失败: {str(e)}")
+
+
+# ==============================================
+# 📊 埋点统计查询（管理员专用）
+# ==============================================
+@router.get("/tracking/chart-clicks/summary")
+async def get_chart_click_stats(
+    days: int = Query(30, description="查询近N天的数据"),
+    admin=Depends(get_admin_user)
+):
+    """
+    获取 TET 图表点击统计汇总（管理员专用）
+
+    返回:
+    - total_clicks: 总点击数
+    - today_clicks: 今日点击数
+    - top_stocks: 点击最多的股票 Top 10
+    - top_users: 点击最多的用户 Top 10
+    - daily_trend: 每日点击趋势
+    """
+    try:
+        db_sync = get_mongo_db_sync()
+        collection = db_sync["tracking_events"]
+        now = datetime.utcnow()
+
+        # 计算时间范围
+        from datetime import timedelta
+        since = now - timedelta(days=days)
+        today_start = datetime(now.year, now.month, now.day, 0, 0, 0)
+        tomorrow_start = today_start + timedelta(days=1)
+
+        # 总点击数
+        total_clicks = collection.count_documents({
+            "event_type": "tet_chart_click"
+        })
+
+        # 今日点击数
+        today_clicks = collection.count_documents({
+            "event_type": "tet_chart_click",
+            "created_at": {"$gte": today_start, "$lt": tomorrow_start}
+        })
+
+        # 近N天点击数
+        period_clicks = collection.count_documents({
+            "event_type": "tet_chart_click",
+            "created_at": {"$gte": since}
+        })
+
+        # 点击最多的股票 Top 10
+        top_stocks_pipeline = [
+            {"$match": {"event_type": "tet_chart_click", "stock_code": {"$ne": ""}}},
+            {"$group": {"_id": "$stock_code", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10}
+        ]
+        top_stocks = list(collection.aggregate(top_stocks_pipeline))
+        top_stocks = [{"stock_code": item["_id"], "count": item["count"]} for item in top_stocks]
+
+        # 点击最多的用户 Top 10
+        top_users_pipeline = [
+            {"$match": {"event_type": "tet_chart_click", "username": {"$ne": ""}}},
+            {"$group": {"_id": {"user_id": "$user_id", "username": "$username"}, "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10}
+        ]
+        top_users_raw = list(collection.aggregate(top_users_pipeline))
+        top_users = [
+            {
+                "user_id": item["_id"]["user_id"],
+                "username": item["_id"]["username"],
+                "count": item["count"]
+            }
+            for item in top_users_raw
+        ]
+
+        # 每日点击趋势（近N天）
+        daily_trend_pipeline = [
+            {
+                "$match": {
+                    "event_type": "tet_chart_click",
+                    "created_at": {"$gte": since}
+                }
+            },
+            {
+                "$group": {
+                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+                    "count": {"$sum": 1}
+                }
+            },
+            {"$sort": {"_id": 1}}
+        ]
+        daily_trend = list(collection.aggregate(daily_trend_pipeline))
+        daily_trend = [{"date": item["_id"], "count": item["count"]} for item in daily_trend]
+
+        return {
+            "success": True,
+            "data": {
+                "total_clicks": total_clicks,
+                "today_clicks": today_clicks,
+                "period_clicks": period_clicks,
+                "period_days": days,
+                "top_stocks": top_stocks,
+                "top_users": top_users,
+                "daily_trend": daily_trend
+            }
+        }
+    except Exception as e:
+        logger.error(f"❌ 查询埋点统计异常: {e}")
+        raise HTTPException(status_code=500, detail=f"查询埋点统计失败: {str(e)}")

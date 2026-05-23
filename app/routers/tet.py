@@ -1,10 +1,12 @@
 import os
 import logging
-from fastapi import APIRouter, Query, HTTPException
+from datetime import datetime
+from fastapi import APIRouter, Query, HTTPException, Request
 import pandas as pd
 import tushare as ts
 
 from app.core.response import ok
+from app.core.database import get_mongo_db_sync
 from tradingagents.utils.trend_emotion_timing import ATrendEmotionTiming  # 你项目里的统一返回封装
 
 router = APIRouter(prefix="/tet", tags=["TET 趋势-情绪-时机指标"])
@@ -86,6 +88,7 @@ def get_tet_latest(
 # ==============================
 @router.get("/chart", summary="获取TET全量历史数据（前端绘图专用）")
 def get_tet_chart_data(
+    request: Request,
     stock_code: str = Query(..., description="股票代码，如 002491"),
     start_date: str = Query(..., description="开始日期 2025-01-01"),
     end_date: str = Query(..., description="结束日期 2026-05-08")
@@ -136,6 +139,29 @@ def get_tet_chart_data(
         tet.calculate_emotion_index()
         tet.calculate_anchored_trend()
         tet.calculate_timing()
+
+        # ✅ 记录埋点（异步写 MongoDB，不阻塞响应）
+        try:
+            # 获取客户端 IP
+            client_ip = request.client.host if request.client else "unknown"
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
+
+            db_sync = get_mongo_db_sync()
+            db_sync["tracking_events"].insert_one({
+                "event_type": "tet_chart_click",
+                "user_id": "",
+                "username": "anonymous",
+                "stock_code": stock_code,
+                "start_date": start_date,
+                "end_date": end_date,
+                "ip": client_ip,
+                "created_at": datetime.utcnow()
+            })
+        except Exception as track_err:
+            # 埋点失败不影响主流程
+            logger.warning(f"⚠️ TET chart 埋点记录失败: {track_err}")
 
         # ✅ 返回全量数据（前端绘图）
         all_data = tet.get_all_data()
