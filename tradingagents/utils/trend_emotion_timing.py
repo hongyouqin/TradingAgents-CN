@@ -67,28 +67,38 @@ class ATrendEmotionTiming:
         df = self.data
         close = df["close_stock"].values
         emotions = []
+        n_rows = len(close)
 
-        # RSI 变体
+        # RSI 变体（修复长度对齐）
         for p in [3, 5, 7, 9, 11, 14]:
+            # 整根数组对齐，不出现长度错位
+            rsi = np.zeros(n_rows)
             delta = np.diff(close)
-            gain = np.maximum(delta,0)
-            loss = -np.minimum(delta,0)
+            if len(delta) < 1:
+                emotions.append(rsi)
+                continue
+
+            gain = np.maximum(delta, 0)
+            loss = -np.minimum(delta, 0)
             avg_gain = pd.Series(gain).rolling(window=p, min_periods=1).mean().values
             avg_loss = pd.Series(loss).rolling(window=p, min_periods=1).mean().values
-            rs = avg_gain/(avg_loss+1e-8)
-            rsi = np.concatenate([[50], 100-(100/(1+rs))])
-            emotions.append(rsi/50-1)
+            rs = avg_gain / (avg_loss + 1e-8)
+            rsi[1:] = 100 - (100 / (1 + rs))
+            emotions.append(rsi / 50 - 1)
 
         # 随机指标变体
         high = df["high"].values
         low = df["low"].values
-        for p in [2,4,6,8,10,12]:
+        for p in [2, 4, 6, 8, 10, 12]:
             hh = pd.Series(high).rolling(window=p).max().values
             ll = pd.Series(low).rolling(window=p).min().values
-            rng = (close-ll)/(hh-ll+1e-8)
-            emotions.append(rng*2-1)
+            rng = (close - ll) / (hh - ll + 1e-8)
+            emotions.append(rng * 2 - 1)
 
-        df["emotion_index"] = np.array(emotions).mean(axis=0)
+        # 关键修复：确保所有信号长度一样
+        emotions_arr = np.array(emotions)
+        df["emotion_index"] = emotions_arr.mean(axis=0)
+
         self.data = df
         return self
 
@@ -140,72 +150,76 @@ class ATrendEmotionTiming:
                 df[col]=df[col].astype(float).round(4)
         return df.to_dict(orient="records")
 
-    # ==============================
-    # 【新增1】单股票回测（论文策略）
-    # ==============================
-    def backtest(self, plot=True, return_equity_curve=False):
-        """
-        论文策略回测：
-        - BUY:  timing_indicator > 1.0
-        - SELL: timing_indicator < -1.0
-        - 持仓 = 信号（次日开盘成交）
+    def backtest(self, plot=False, return_equity_curve=False):
+        df = self.data.copy().dropna()
 
-        Parameters
-        ----------
-        plot : bool
-            是否绘制回测曲线图（默认 True，仅适用于 Jupyter 环境）
-        return_equity_curve : bool
-            是否在返回结果中包含每日净值曲线数据
-
-        Returns
-        -------
-        dict
-        """
-        df = self.data.copy()
+        # ==============================
+        # 🟢 买入：Timing > 1.0（时机到位）
+        # ==============================
         df["signal"] = 0
         df.loc[df["timing_indicator"] > 1.0, "signal"] = 1
-        df.loc[df["timing_indicator"] < -1.0, "signal"] = -1
 
-        # 次日开盘成交（真实回测）
+        # ==============================
+        # 🔴 卖出：趋势消失（Anchored Trend ≤ 0）
+        # ==============================
+        df.loc[df["anchored_trend_score"] <= 0.0, "signal"] = 0
+
+        df["signal"] = df["signal"].fillna(0).astype(int)
+
+        # ==============================
+        # 计算收益
+        # ==============================
         df["ret"] = df["close_stock"].pct_change().fillna(0)
         df["strategy_ret"] = df["signal"].shift(1) * df["ret"]
 
-        # 累计收益
         df["cum_strategy"] = (1 + df["strategy_ret"]).cumprod()
         df["cum_bench"] = (1 + df["ret"]).cumprod()
 
-        # 指标
+        # ==============================
+        # 🛑 超级关键修复：清除 inf / nan，避免 JSON 报错
+        # ==============================
+        df["cum_strategy"] = df["cum_strategy"].replace([float('inf'), -float('inf')], 0.0).fillna(1.0)
+        df["cum_bench"] = df["cum_bench"].replace([float('inf'), -float('inf')], 0.0).fillna(1.0)
+
         total_ret = df["cum_strategy"].iloc[-1] - 1
         annual_ret = df["strategy_ret"].mean() * 252
         sharpe = np.sqrt(252) * df["strategy_ret"].mean() / (df["strategy_ret"].std() + 1e-8)
         max_dd = (df["cum_strategy"] / df["cum_strategy"].cummax() - 1).min()
         trade_count = int((df["signal"].diff().abs() > 0).sum())
 
-        if plot:
-            plt.figure(figsize=(12,5))
-            plt.plot(df["date"], df["cum_strategy"], label="策略", linewidth=2)
-            plt.plot(df["date"], df["cum_bench"], label="标的", alpha=0.6)
-            plt.title(f"{self.stock_code} 回测")
-            plt.legend()
-            plt.grid(alpha=0.3)
-            plt.show()
+        trades = df[df["signal"].diff() != 0]
+        win_rate = 0.0
+        if len(trades) > 0:
+            win_rate = (trades["strategy_ret"] > 0).mean()
+
+        # 把所有指标也清理一遍，防止出现 inf
+        total_ret = np.nan_to_num(total_ret, nan=0.0, posinf=0.0, neginf=0.0)
+        annual_ret = np.nan_to_num(annual_ret, nan=0.0, posinf=0.0, neginf=0.0)
+        sharpe = np.nan_to_num(sharpe, nan=0.0, posinf=0.0, neginf=0.0)
+        max_dd = np.nan_to_num(max_dd, nan=0.0, posinf=0.0, neginf=0.0)
+        win_rate = np.nan_to_num(win_rate, nan=0.0, posinf=0.0, neginf=0.0)
 
         result = {
-            "code": self.stock_code,
-            "total_return": round(total_ret, 4),
-            "annual_return": round(annual_ret, 4),
-            "sharpe_ratio": round(sharpe, 2),
-            "max_drawdown": round(max_dd, 4),
+            "total_return": round(float(total_ret), 3),
+            "annual_return": round(float(annual_ret), 3),
+            "sharpe_ratio": round(float(sharpe), 2),
+            "max_drawdown": round(float(max_dd), 3),
             "trade_count": trade_count,
-            "win_rate": round(self._calc_win_rate(df), 4)
+            "win_rate": round(float(win_rate), 2)
         }
 
+        # ==============================
+        # ✅ 返回曲线（已清理非法值，绝对不报错）
+        # ==============================
         if return_equity_curve:
-            equity_curve = df[["date", "cum_strategy", "cum_bench"]].copy()
-            equity_curve["date"] = equity_curve["date"].astype(str)
-            result["equity_curve"] = equity_curve.to_dict(orient="records")
+            result["equity_curve"] = {
+                "date": df["date"].astype(str).tolist(),
+                "strategy": df["cum_strategy"].round(4).tolist(),
+                "benchmark": df["cum_bench"].round(4).tolist()
+            }
 
         return result
+
 
     def _calc_win_rate(self, df):
         """计算胜率（盈利交易 / 总交易）"""
