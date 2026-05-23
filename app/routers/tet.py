@@ -284,9 +284,6 @@ def get_tet_backtest(
         raise HTTPException(status_code=500, detail=f"TET回测失败: {str(e)}")
 
 
-# ==============================
-# 【接口4】多股票投资组合
-# ==============================
 @router.post("/portfolio", summary="多股票 TET 投资组合分析")
 def build_tet_portfolio(
     request: Request,
@@ -300,7 +297,7 @@ def build_tet_portfolio(
     对多只股票进行 TET 指标筛选，构建投资组合并回测
 
     - 筛选条件: anchored_trend_score > 0.2 AND timing_indicator > 0.8
-    - 权重: 等权 (weight_equal) / 按 timing 强度加权 (weight_timing)
+    - 权重: 等权 (weight_equal) / 按 timing 强度加权 (weight_timing) / 论文波动率+趋势加权(weight_vol_trend)
     """
     try:
         if not stock_codes or len(stock_codes) == 0:

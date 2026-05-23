@@ -252,12 +252,21 @@ class PortfolioBuilder:
         self.hs300_df = hs300_df
         self.results = []
 
+    # --------------------------
+    # 🔥 新增：论文要求的历史波动率
+    # --------------------------
+    def calculate_historical_volatility(self, close_series, window=20):
+        """计算20日历史波动率（年化）= 论文指定用的波动率"""
+        ret = close_series.pct_change().fillna(0)
+        vol = ret.rolling(window=window).std() * np.sqrt(252)  # 年化
+        return vol
+
     def build(self, top_n=10):
         """
         按论文逻辑构建组合：
         1. 计算每只股票指标
         2. 筛选 timing > 0.8 且 anchored_trend > 0.2
-        3. 等权 / 按趋势强度加权
+        3. 按论文：等权 / 趋势强度加权 / 【波动率×趋势】加权
         """
         if len(self.stock_dict) == 0:
             self.results = pd.DataFrame()
@@ -275,9 +284,18 @@ class PortfolioBuilder:
                 model.calculate_timing()
 
                 latest = model.get_latest()
+
+                # ======================
+                # ✅ 论文新增：波动率 + 预期收益
+                # ======================
+                hv = self.calculate_historical_volatility(df["close"])
+                latest["hist_volatility"] = hv.iloc[-1]  # 最新波动率
+                latest["expected_return"] = latest["anchored_trend_score"] * latest["hist_volatility"]  # 论文公式
+
                 latest["code"] = code
                 portfolio.append(latest)
-            except:
+            except Exception as e:
+                print(f"[Portfolio] {code} 计算失败: {e}")
                 continue
 
         df_port = pd.DataFrame(portfolio)
@@ -289,7 +307,7 @@ class PortfolioBuilder:
         df_port = df_port[
             (df_port["anchored_trend_score"] > 0.2) &
             (df_port["timing_indicator"] > 0.8)
-        ].sort_values("timing_indicator", ascending=False)
+        ].sort_values("expected_return", ascending=False)  # 按论文预期收益排序
 
         # 取前N只
         df_port = df_port.head(top_n)
@@ -298,17 +316,17 @@ class PortfolioBuilder:
             self.results = df_port
             return df_port
 
-        # 等权
-        df_port["weight_equal"] = 1 / len(df_port)
-        # 按时机强度加权
-        df_port["weight_timing"] = df_port["timing_indicator"] / df_port["timing_indicator"].sum()
+        # 三种加权方式（论文全覆盖）
+        df_port["weight_equal"] = 1 / len(df_port)                           # 等权
+        df_port["weight_timing"] = df_port["timing_indicator"] / df_port["timing_indicator"].sum()  # 时机加权
+        df_port["weight_vol_trend"] = df_port["expected_return"] / df_port["expected_return"].sum() # 论文官方加权！
 
         self.results = df_port
         return df_port
 
     def build_summary(self, top_n=10):
         """
-        构建组合并以 API 友好格式返回
+        构建组合并以 API 友好格式返回（带波动率+预期收益）
         """
         df_port = self.build(top_n=top_n)
         if df_port.empty:
@@ -322,9 +340,12 @@ class PortfolioBuilder:
                 "emotion_index": round(float(row["emotion_index"]), 2),
                 "anchored_trend_score": round(float(row["anchored_trend_score"]), 2),
                 "timing_indicator": round(float(row["timing_indicator"]), 2),
+                "hist_volatility": round(float(row["hist_volatility"]), 3),       # 新增
+                "expected_return": round(float(row["expected_return"]), 3),     # 新增（论文核心）
                 "action": row.get("action", "HOLD"),
                 "weight_equal": round(float(row["weight_equal"]), 4),
-                "weight_timing": round(float(row["weight_timing"]), 4)
+                "weight_timing": round(float(row["weight_timing"]), 4),
+                "weight_vol_trend": round(float(row["weight_vol_trend"]), 4),   # 论文加权
             })
 
         return {
@@ -371,8 +392,8 @@ class PortfolioBuilder:
 
         if return_equity_curve:
             curve = pd.DataFrame({
-                "date": combine.index.astype(str),
-                "cum_return": cum.values
+                "date": cum.index.astype(str),
+                "cum_return": cum.round(4).values
             })
             result["equity_curve"] = curve.to_dict(orient="records")
 
