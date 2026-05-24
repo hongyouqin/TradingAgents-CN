@@ -236,14 +236,31 @@ def get_tet_backtest(
     - equity_curve: 每日净值曲线（策略 vs 基准）
     """
     try:
+        from datetime import datetime, timedelta
         pro = _init_tushare_pro()
-        start_fmt = start_date.replace("-", "")
-        end_fmt = end_date.replace("-", "")
 
-        stock_df = _fetch_stock_df(pro, stock_code, start_fmt, end_fmt)
-        hs300_df = _fetch_hs300_df(pro, start_fmt, end_fmt)
+        # 用户传入的时间
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        user_start_dt = datetime.strptime(start_date, "%Y-%m-%d")
 
-        # 计算 TET 指标
+        # ==============================
+        # 核心规则：指标计算起点 = 取【5年前】和【用户开始时间】中更早的那个
+        # ==============================
+        calc_start_dt_5y = end_dt - timedelta(days=365 * 5)
+        real_calc_start_dt = min(user_start_dt, calc_start_dt_5y)  # 更早的时间
+
+        # 格式化日期
+        calc_start = real_calc_start_dt.strftime("%Y%m%d")
+        calc_end = end_dt.strftime("%Y%m%d")
+
+        # 获取足够长的数据（≥5年）用于计算指标
+        stock_df = _fetch_stock_df(pro, stock_code, calc_start, calc_end)
+        hs300_df = _fetch_hs300_df(pro, calc_start, calc_end)
+
+        if stock_df.empty or len(stock_df) < 250:
+            raise HTTPException(status_code=400, detail="数据量不足，无法计算有效指标")
+
+        # 计算所有 TET 指标（用够长数据，指标准确）
         tet = ATrendEmotionTiming(stock_code)
         tet.load_data(stock_df, hs300_df)
         tet.calculate_trend_score()
@@ -251,10 +268,21 @@ def get_tet_backtest(
         tet.calculate_anchored_trend()
         tet.calculate_timing()
 
+        # ==============================
+        # 回测只保留用户选择的区间 ✅
+        # ==============================
+        tet.data = tet.data[
+            (tet.data["date"] >= start_date) &
+            (tet.data["date"] <= end_date)
+        ].copy()
+
+        if len(tet.data) < 30:
+            raise HTTPException(status_code=400, detail="回测区间太短，至少需要30个交易日")
+
         # 执行回测
         result = tet.backtest(plot=False, return_equity_curve=return_equity_curve)
 
-        # ✅ 记录埋点（不阻塞响应）
+        # 埋点（不阻塞响应）
         try:
             client_ip = request.client.host if request.client else "unknown"
             forwarded = request.headers.get("X-Forwarded-For")

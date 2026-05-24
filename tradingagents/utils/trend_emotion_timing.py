@@ -154,16 +154,13 @@ class ATrendEmotionTiming:
         df = self.data.copy().dropna()
 
         # ==============================
-        # 🟢 买入：Timing > 1.0（时机到位）
+        # ✅ 论文 100% 原版信号
         # ==============================
         df["signal"] = 0
-        df.loc[df["timing_indicator"] > 1.0, "signal"] = 1
+        df.loc[df["timing_indicator"] > 1.0, "signal"] = 1      # 买
+        df.loc[df["timing_indicator"] <= 0, "signal"] = 0     # 卖（论文真正退出）
 
-        # ==============================
-        # 🔴 卖出：趋势消失（Anchored Trend ≤ 0）
-        # ==============================
-        df.loc[df["anchored_trend_score"] <= 0.0, "signal"] = 0
-
+        # 保证信号是 0/1
         df["signal"] = df["signal"].fillna(0).astype(int)
 
         # ==============================
@@ -175,24 +172,24 @@ class ATrendEmotionTiming:
         df["cum_strategy"] = (1 + df["strategy_ret"]).cumprod()
         df["cum_bench"] = (1 + df["ret"]).cumprod()
 
-        # ==============================
-        # 🛑 超级关键修复：清除 inf / nan，避免 JSON 报错
-        # ==============================
-        df["cum_strategy"] = df["cum_strategy"].replace([float('inf'), -float('inf')], 0.0).fillna(1.0)
-        df["cum_bench"] = df["cum_bench"].replace([float('inf'), -float('inf')], 0.0).fillna(1.0)
+        # 清理非法值
+        df["cum_strategy"] = df["cum_strategy"].replace([np.inf, -np.inf], 0.0).fillna(1.0)
+        df["cum_bench"] = df["cum_bench"].replace([np.inf, -np.inf], 0.0).fillna(1.0)
 
+        # 指标计算
         total_ret = df["cum_strategy"].iloc[-1] - 1
         annual_ret = df["strategy_ret"].mean() * 252
         sharpe = np.sqrt(252) * df["strategy_ret"].mean() / (df["strategy_ret"].std() + 1e-8)
         max_dd = (df["cum_strategy"] / df["cum_strategy"].cummax() - 1).min()
         trade_count = int((df["signal"].diff().abs() > 0).sum())
 
+        # 胜率
         trades = df[df["signal"].diff() != 0]
         win_rate = 0.0
         if len(trades) > 0:
             win_rate = (trades["strategy_ret"] > 0).mean()
 
-        # 把所有指标也清理一遍，防止出现 inf
+        # 防 nan/inf
         total_ret = np.nan_to_num(total_ret, nan=0.0, posinf=0.0, neginf=0.0)
         annual_ret = np.nan_to_num(annual_ret, nan=0.0, posinf=0.0, neginf=0.0)
         sharpe = np.nan_to_num(sharpe, nan=0.0, posinf=0.0, neginf=0.0)
@@ -208,9 +205,6 @@ class ATrendEmotionTiming:
             "win_rate": round(float(win_rate), 2)
         }
 
-        # ==============================
-        # ✅ 返回曲线（已清理非法值，绝对不报错）
-        # ==============================
         if return_equity_curve:
             result["equity_curve"] = {
                 "date": df["date"].astype(str).tolist(),
@@ -219,7 +213,6 @@ class ATrendEmotionTiming:
             }
 
         return result
-
 
     def _calc_win_rate(self, df):
         """计算胜率（盈利交易 / 总交易）"""
