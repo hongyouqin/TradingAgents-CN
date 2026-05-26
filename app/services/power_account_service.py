@@ -1,6 +1,6 @@
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 from bson import ObjectId, Decimal128
 from pymongo import MongoClient, errors
 import asyncio
@@ -144,12 +144,44 @@ class PowerAccountService:
                 result[k] = v
         return result
 
+
+    def _extract_user_info(self, user: Union[User, str, Dict[str, Any]]) -> Optional[tuple]:
+        """提取用户ID和用户名"""
+        user_id_str = None
+        username = None
+        
+        if isinstance(user, dict):
+            # 支持多种字典格式
+            user_id = user.get('id') or user.get('_id') or user.get('user_id')
+            if user_id:
+                user_id_str = str(user_id) if not isinstance(user_id, str) else user_id
+            username = user.get('username') or user.get('name')
+            
+        elif isinstance(user, str):
+            user_id_str = user
+            
+        elif hasattr(user, 'id') and hasattr(user, 'username'):
+            user_id_str = str(user.id)
+            username = user.username
+            
+        if not user_id_str:
+            return None
+            
+        # 如果只有ID没有用户名，从数据库获取
+        if not username and ObjectId.is_valid(user_id_str):
+            user_doc = self.users_collection.find_one({"_id": ObjectId(user_id_str)})
+            if user_doc:
+                username = user_doc.get('username', 'unknown')
+                
+        return (user_id_str, username) if username else None
+    
     def _get_or_create_account_sync(self, user: User) -> Optional[Dict[str, Any]]:
         try:
-            user_id_str = str(user.id)
-            if not ObjectId.is_valid(user_id_str):
-                logger.error(f"❌ 无效的用户ID: {user_id_str}")
+            user_info = self._extract_user_info(user)
+            if not user_info:
+                logger.error(f"❌ 无法从参数提取用户信息: {type(user)}")
                 return None
+            user_id_str, username = user_info
 
             real_user = self.users_collection.find_one({"_id": ObjectId(user_id_str)})
             if not real_user:
