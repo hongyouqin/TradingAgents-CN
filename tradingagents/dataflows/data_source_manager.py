@@ -803,17 +803,32 @@ class DataSourceManager:
             logger.info(f"🔍 [技术指标详情] ===== 数据详情结束 =====")
 
             # 计算最新价格和涨跌幅
+            
             latest_price = latest_data.get('close', 0)
             prev_close = data.iloc[-2].get('close', latest_price) if len(data) > 1 else latest_price
             change = latest_price - prev_close
             change_pct = (change / prev_close * 100) if prev_close != 0 else 0
+
+            # 获取日内最新价格
+            from tradingagents.dataflows.cache.mongodb_cache_adapter import get_mongodb_cache_adapter
+            adapter = get_mongodb_cache_adapter()
+            mq = adapter.get_market_quotes(symbol)
+            
+
+            # 安全处理：如果没有实时行情，就用日线收盘价代替
+            if mq is not None and hasattr(mq, 'close'):
+                display_price = mq.close
+                logger.info(f'✅ 使用实时行情价格: {display_price}; 日线收盘价: {latest_price}')
+            else:
+                display_price = latest_price
+                logger.warning(f'⚠️ 未获取到实时行情，使用日线收盘价代替: {display_price} 股票代码: {symbol}')
 
             # 格式化数据报告
             result = f"📊 {stock_name}({symbol}) - 技术分析数据\n"
             result += f"数据期间: {start_date} 至 {end_date}\n"
             result += f"数据条数: {original_data_count}条 (展示最近{display_rows}个交易日)\n\n"
 
-            result += f"💰 最新价格: ¥{latest_price:.2f}\n"
+            result += f"💰 最新价格: ¥{display_price:.2f}\n"
             result += f"📈 涨跌额: {change:+.2f} ({change_pct:+.2f}%)\n\n"
 
             # 添加技术指标
