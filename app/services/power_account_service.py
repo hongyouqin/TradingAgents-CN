@@ -175,7 +175,7 @@ class PowerAccountService:
                 
         return (user_id_str, username) if username else None
     
-    def _get_or_create_account_sync(self, user: User) -> Optional[Dict[str, Any]]:
+    def _get_or_create_account_sync(self, user: Union[User, str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         try:
             user_info = self._extract_user_info(user)
             if not user_info:
@@ -194,14 +194,14 @@ class PowerAccountService:
                 account['total_recharged'] = self._decimal_from_128(account['total_recharged'])
                 account['total_consumed'] = self._decimal_from_128(account['total_consumed'])
                 account['frozen_amount'] = self._decimal_from_128(account['frozen_amount'])
-                logger.info(f"✅ 获取账户: {user.username}({user_id_str})")
+                logger.info(f"✅ 获取账户: {username}({user_id_str})") 
                 return account
 
             now = datetime.utcnow()
             zero = Decimal('0.00')
             account_doc = {
                 "user_id": user_id_str,
-                "username": user.username,
+                "username": username, 
                 "balance": self._decimal_to_128(zero),
                 "total_recharged": self._decimal_to_128(zero),
                 "total_consumed": self._decimal_to_128(zero),
@@ -218,11 +218,11 @@ class PowerAccountService:
             account_doc['total_consumed'] = zero
             account_doc['frozen_amount'] = zero
 
-            logger.info(f"✅ 新账户创建成功: {user.username}({user_id_str})")
+            logger.info(f"✅ 新账户创建成功: {username}({user_id_str})")  
             return account_doc
 
         except errors.DuplicateKeyError:
-            logger.warning(f"⚠️ 账户并发冲突，重试获取: {user.username}")
+            logger.warning(f"⚠️ 账户并发冲突，重试获取: {username}") 
             time.sleep(0.05)
             return self._get_or_create_account_sync(user)
         except Exception as e:
