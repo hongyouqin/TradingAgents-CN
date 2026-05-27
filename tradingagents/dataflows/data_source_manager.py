@@ -1257,8 +1257,8 @@ class DataSourceManager:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
 
-                    # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
-                    stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
+                    stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                    # stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                     stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
                 else:
                     stock_name = f'股票{symbol}'
@@ -1286,15 +1286,15 @@ class DataSourceManager:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            # data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date))
-            data = run_async_safe(provider.get_historical_data(symbol, start_date, end_date))
+            data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date))
+            # data = run_async_safe(provider.get_historical_data(symbol, start_date, end_date))
             if data is not None and not data.empty:
                 # 保存到缓存
                 self._save_to_cache(symbol, data, start_date, end_date)
 
                 # 获取股票基本信息（异步）
-                # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
-                stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
+                stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                # stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                 stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
 
                 # 格式化返回
@@ -1342,15 +1342,15 @@ class DataSourceManager:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            # data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
-            coro  = provider.get_historical_data(symbol, start_date, end_date, period)
-            data = run_async_safe(coro)
+            data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
+            # coro  = provider.get_historical_data(symbol, start_date, end_date, period)
+            # data = run_async_safe(coro)
             duration = time.time() - start_time
             if data is not None and not data.empty:
                 # 🔧 修复：使用统一的格式化方法，包含技术指标计算
                 # 获取股票基本信息
-                # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
-                stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
+                stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+                # stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                 
                 stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
 
@@ -1388,15 +1388,15 @@ class DataSourceManager:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        # data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
-        data = run_async_safe(provider.get_historical_data(symbol, start_date, end_date, period))
+        data = loop.run_until_complete(provider.get_historical_data(symbol, start_date, end_date, period))
+        # data = run_async_safe(provider.get_historical_data(symbol, start_date, end_date, period))
         
 
         if data is not None and not data.empty:
             # 🔧 修复：使用统一的格式化方法，包含技术指标计算
             # 获取股票基本信息
-            # stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
-            stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
+            stock_info = loop.run_until_complete(provider.get_stock_basic_info(symbol))
+            # stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
             stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
 
             # 调用统一的格式化方法（包含技术指标计算）
