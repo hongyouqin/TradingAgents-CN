@@ -330,14 +330,18 @@ class MongoDBCacheAdapter:
             return None
             
         try:
-            code6 = str(symbol).zfill(6)
+            code6 = str(symbol).split('.')[0].strip()  # 去掉.SH之类后缀
+            code6 = code6.zfill(6)
             collection = self.db.market_quotes
             
-            # 获取最新行情
-            doc = collection.find_one({"code": code6}, {"_id": 0}, sort=[("timestamp", -1)])
+            doc = collection.find_one(
+                {"code": code6},
+                {"_id": 0},
+                sort=[("_id", -1)]  # 👈 这行修复了！
+            )
             
             if doc:
-                logger.debug(f"✅ 从MongoDB获取行情数据: {symbol}")
+                logger.debug(f"✅ 从MongoDB获取行情数据: {symbol} → code={code6}")
                 return doc
             else:
                 logger.debug(f"📊 MongoDB中未找到行情数据: {symbol}")
