@@ -417,6 +417,82 @@ class TushareSyncService:
     #     logger.info(f"✅ 单只接口获取完成，成功 {len(quotes_map)}/{len(symbols)} 只")
     #     return quotes_map
 
+    # ==================== 单只股票历史数据同步 ====================
+
+    async def sync_single_stock_historical(
+        self,
+        symbol: str,
+        start_date: str = None,
+        end_date: str = None,
+        period: str = "daily"
+    ) -> bool:
+        """
+        同步单只股票的历史数据到MongoDB。
+
+        当 _get_mongodb_data 发现 MongoDB 中缺少某只股票的历史数据时，
+        调用此方法进行补充同步，确保后续能直接从 MongoDB 读取。
+
+        Args:
+            symbol: 6位股票代码
+            start_date: 开始日期 (YYYY-MM-DD)，为None时自动确定
+            end_date: 结束日期 (YYYY-MM-DD)，为None时使用当前日期
+            period: 数据周期 (daily/weekly/monthly)，默认daily
+
+        Returns:
+            bool: 是否成功同步到至少一条记录
+        """
+        period_name = {"daily": "日线", "weekly": "周线", "monthly": "月线"}.get(period, period)
+        logger.info(f"🔄 [单股同步] 开始同步{symbol}的{period_name}数据...")
+
+        try:
+            # 1. 确定结束日期
+            if not end_date:
+                end_date = datetime.now().strftime('%Y-%m-%d')
+
+            # 2. 确定起始日期
+            if not start_date:
+                # 尝试从上市日期开始
+                stock_doc = await self.db.stock_basic_info.find_one(
+                    {"code": symbol},
+                    {"list_date": 1}
+                )
+                if stock_doc and stock_doc.get("list_date"):
+                    list_date = stock_doc["list_date"]
+                    if isinstance(list_date, str) and len(list_date) == 8 and list_date.isdigit():
+                        start_date = f"{list_date[:4]}-{list_date[4:6]}-{list_date[6:]}"
+                    else:
+                        start_date = str(list_date)
+                else:
+                    # 默认取近90个交易日（约4个月）
+                    start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+
+            logger.info(f"📊 [单股同步] {symbol}: 请求{period_name}数据 start={start_date}, end={end_date}")
+
+            # 3. API限流后调用Tushare获取历史数据
+            await self.rate_limiter.acquire()
+            df = await self.provider.get_historical_data(symbol, start_date, end_date, period=period)
+
+            if df is None or df.empty:
+                logger.warning(f"⚠️ [单股同步] {symbol}: Tushare未返回{period_name}数据")
+                return False
+
+            # 4. 保存到MongoDB
+            records_saved = await self._save_historical_data(symbol, df, period=period)
+            logger.info(f"✅ [单股同步] {symbol}: 保存 {records_saved} 条{period_name}记录 "
+                       f"(start={start_date}, end={end_date})")
+
+            return records_saved > 0
+
+        except Exception as e:
+            import traceback
+            logger.error(
+                f"❌ [单股同步] {symbol} {period}数据同步失败\n"
+                f"   参数: start={start_date}, end={end_date}\n"
+                f"   错误: {e}\n"
+                f"   堆栈:\n{traceback.format_exc()}"
+            )
+            return False
+
     async def _process_quotes_batch(self, batch: List[str]) -> Dict[str, Any]:
         """处理行情批次"""
         batch_stats = {

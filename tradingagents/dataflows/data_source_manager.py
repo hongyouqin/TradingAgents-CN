@@ -11,6 +11,7 @@ import time
 from typing import Dict, List, Optional, Any
 from enum import Enum
 import warnings
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
@@ -416,6 +417,157 @@ class DataSourceManager:
         except Exception:
             return 0
 
+    # ==================== 单只股票历史数据自动同步 ====================
+
+    def _sync_single_stock_history(self, symbol: str, start_date: str = None, end_date: str = None) -> bool:
+        """
+        同步单只股票的历史日线数据到MongoDB（同步封装，内部使用 run_async_safe）。
+
+        当 MongoDB 中缺少某只股票的历史数据时，调用 TushareSyncService 的
+        sync_single_stock_historical 方法拉取 Tushare 数据并写入 stock_daily_quotes。
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 使用已初始化好的全局 TushareSyncService 实例（避免重复连接）
+            from app.worker.tushare_sync_service import get_tushare_sync_service
+            service = run_async_safe(get_tushare_sync_service())
+            result = run_async_safe(service.sync_single_stock_historical(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                period="daily"
+            ))
+            if result:
+                logger.info(f"✅ [单股同步] {symbol}: 历史数据同步成功")
+            else:
+                logger.warning(f"⚠️ [单股同步] {symbol}: 未获取到历史数据")
+            return result
+        except Exception as e:
+            logger.error(f"❌ [单股同步] {symbol}: 同步失败 - {e}", exc_info=True)
+            return False
+
+    # ==================== 实时行情数据合并 ====================
+
+
+    def _merge_realtime_data(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """
+        将 market_quotes 表中的实时行情数据合并到历史日线DataFrame的末尾。
+        """
+        try:
+            from tradingagents.dataflows.cache.mongodb_cache_adapter import get_mongodb_cache_adapter
+            adapter = get_mongodb_cache_adapter()
+
+            # 1. 获取实时行情
+            mq = adapter.get_market_quotes(symbol)
+            if mq is None:
+                logger.info(f"⏭️ [实时合并] {symbol}: market_quotes 无数据，跳过")
+                return df
+
+            # 2. 获取实时行情的交易日期
+            realtime_date = mq.get('trade_date')
+            if not realtime_date:
+                logger.info(f"⏭️ [实时合并] {symbol}: market_quotes 缺少 trade_date，跳过")
+                return df
+
+            # 3. 统一日期格式为 YYYY-MM-DD
+            realtime_date_str = str(realtime_date)
+            if len(realtime_date_str) == 8 and realtime_date_str.isdigit():
+                realtime_date_str = f"{realtime_date_str[:4]}-{realtime_date_str[4:6]}-{realtime_date_str[6:]}"
+
+            # 🔧 修复1: 处理历史数据的日期（可能在索引中）
+            df_copy = df.copy()
+            
+            # 如果日期在索引中，重置索引
+            if df_copy.index.name == 'date' or 'date' in str(df_copy.index):
+                df_copy = df_copy.reset_index()
+            
+            # 统一日期列名
+            if 'date' in df_copy.columns and 'trade_date' not in df_copy.columns:
+                df_copy = df_copy.rename(columns={'date': 'trade_date'})
+            
+            # 如果还没有 trade_date，尝试从 index 获取
+            if 'trade_date' not in df_copy.columns:
+                if df_copy.index.name == 'trade_date' or 'trade_date' in str(df_copy.index):
+                    df_copy = df_copy.reset_index()
+            
+            # 确保 trade_date 是字符串格式
+            if 'trade_date' in df_copy.columns:
+                # 转换为字符串并提取前10位（YYYY-MM-DD）
+                df_copy['trade_date'] = pd.to_datetime(df_copy['trade_date']).dt.strftime('%Y-%m-%d')
+            else:
+                logger.warning(f"⚠️ [实时合并] {symbol}: 历史数据中没有日期列，跳过合并")
+                return df
+
+            # 4. 检查历史数据中是否已存在该日期的记录
+            existing_dates = df_copy['trade_date'].values
+            if realtime_date_str in existing_dates:
+                logger.info(f"⏭️ [实时合并] {symbol} {realtime_date_str} 已在历史日线中，跳过合并")
+                return df
+
+            # 5. 构建实时数据行（字段与历史日线完全对齐）
+            volume_val = mq.get('volume', 0) or 0
+            amount_val = mq.get('amount', 0) or 0
+            
+            # 🔧 修复2: 获取历史数据的列名，保持一致性
+            realtime_row = {}
+            
+            # 复制历史数据的列结构
+            for col in df_copy.columns:
+                if col == 'trade_date':
+                    realtime_row[col] = realtime_date_str
+                elif col == 'open':
+                    realtime_row[col] = mq.get('open')
+                elif col == 'high':
+                    realtime_row[col] = mq.get('high')
+                elif col == 'low':
+                    realtime_row[col] = mq.get('low')
+                elif col == 'close':
+                    realtime_row[col] = mq.get('close')
+                elif col == 'volume':
+                    realtime_row[col] = volume_val
+                elif col == 'vol':
+                    realtime_row[col] = volume_val
+                elif col == 'amount':
+                    realtime_row[col] = amount_val
+                elif col == 'pct_chg':
+                    realtime_row[col] = mq.get('pct_chg')
+                elif col == 'pre_close':
+                    realtime_row[col] = mq.get('pre_close')
+                elif col == 'ts_code':
+                    # 添加股票代码
+                    realtime_row[col] = f"{symbol}.SH"  # 根据实际情况调整后缀
+                else:
+                    # 其他字段设为 NaN 或默认值
+                    realtime_row[col] = None
+
+            # 确保必要的字段都存在
+            realtime_row['data_source'] = 'market_quotes_realtime'
+            realtime_row['period'] = 'daily'
+
+            # 6. 附加到 DataFrame
+            realtime_df = pd.DataFrame([realtime_row])
+            df_merged = pd.concat([df_copy, realtime_df], ignore_index=True)
+
+            # 7. 按日期排序
+            if 'trade_date' in df_merged.columns:
+                df_merged = df_merged.sort_values('trade_date').reset_index(drop=True)
+
+            logger.info(f"✅ [实时合并] 已追加 {symbol} 的 {realtime_date_str} 实时行情 "
+                    f"(close={realtime_row.get('close')}), 总计 {len(df_merged)} 条")
+            
+            # 🔧 修复3: 保留原始的 ts_code 列（如果存在）
+            if 'ts_code' in df_merged.columns:
+                # 填充历史数据中可能缺失的 ts_code
+                df_merged['ts_code'] = df_merged['ts_code'].fillna(f"{symbol}.SH")
+            
+            return df_merged
+
+        except Exception as e:
+            logger.error(f"❌ [实时合并] {symbol} 合并失败: {e}", exc_info=True)
+            return df
+
     def _format_stock_data_response(self, data: pd.DataFrame, symbol: str, stock_name: str, start_date: str, end_date: str) -> str:
         try:
             original_data_count = len(data)
@@ -473,16 +625,14 @@ class DataSourceManager:
             change = latest_price - prev_close
             change_pct = (change / prev_close * 100) if prev_close != 0 else 0
 
-            from tradingagents.dataflows.cache.mongodb_cache_adapter import get_mongodb_cache_adapter
-            adapter = get_mongodb_cache_adapter()
-            mq = adapter.get_market_quotes(symbol)
-
-            if mq is not None and hasattr(mq, 'close'):
-                display_price = mq.close
-                logger.info(f'✅ 使用实时行情价格: {display_price}; 日线收盘价: {latest_price}')
+            # 实时数据已通过 _merge_realtime_data 合并到 DataFrame 末尾
+            # latest_price 即为最新价（实时行情或上一交易日收盘价）
+            display_price = latest_price
+            latest_data_source = latest_data.get('data_source', '')
+            if 'realtime' in str(latest_data_source):
+                logger.info(f"✅ [实时合并] 最新行情来自 market_quotes 实时数据: close={display_price}")
             else:
-                display_price = latest_price
-                logger.warning(f'⚠️ 未获取到实时行情，使用日线收盘价代替: {display_price} 股票代码: {symbol}')
+                logger.info(f"📊 [历史数据] 使用历史日线最新收盘价: {display_price}")
 
             result = f"📊 {stock_name}({symbol}) - 技术分析数据\n"
             result += f"数据期间: {start_date} 至 {end_date}\n"
@@ -694,8 +844,50 @@ class DataSourceManager:
             from tradingagents.dataflows.cache.mongodb_cache_adapter import get_mongodb_cache_adapter
             adapter = get_mongodb_cache_adapter()
             df = adapter.get_historical_data(symbol, start_date, end_date, period=period)
+
+            # ====== 增强1: 数据缺失或不最新 → 用Tushare单股同步补充 ======
+            need_sync = False
+            sync_start_date = start_date  # 同步起始（默认使用请求的start_date）
+
+            if df is None or df.empty:
+                logger.info(f"🔄 [MongoDB] 未找到{symbol}的{period}数据，尝试通过Tushare全量同步补充...")
+                need_sync = True
+            else:
+                # 即使有数据，也不一定是最新日期的，检查最后交易日
+                date_col = 'trade_date' if 'trade_date' in df.columns else ('date' if 'date' in df.columns else None)
+                if date_col:
+                    try:
+                        last_dt_str = str(df[date_col].iloc[-1])[:10]
+                        today_str = datetime.now().strftime('%Y-%m-%d')
+                        if last_dt_str < today_str:
+                            # 从最后交易日的下一天开始增量同步
+                            last_dt = datetime.strptime(last_dt_str, '%Y-%m-%d')
+                            sync_start_date = (last_dt + timedelta(days=1)).strftime('%Y-%m-%d')
+                            logger.info(f"🔄 [MongoDB] {symbol} 最后交易日 {last_dt_str} < {today_str}，"
+                                       f"增量同步 {sync_start_date}~{end_date or today_str}...")
+                            need_sync = True
+                        else:
+                            logger.info(f"✅ [MongoDB] {symbol} 数据已是最新 ({last_dt_str})，跳过同步")
+                    except Exception as e:
+                        logger.warning(f"⚠️ [MongoDB] 检查{symbol}日期状态失败: {e}")
+
+            if need_sync:
+                sync_ok = self._sync_single_stock_history(
+                    symbol,
+                    start_date=sync_start_date,
+                    end_date=end_date
+                )
+                if sync_ok:
+                    # 同步成功后重新从MongoDB读取（upsert 保证不重复）
+                    df = adapter.get_historical_data(symbol, start_date, end_date, period=period)
+
+            # ====== 增强2: 有历史数据时，合并实时行情 ======
             if df is not None and not df.empty:
                 logger.info(f"✅ [数据来源: MongoDB缓存] 成功获取{period}数据: {symbol} ({len(df)}条记录)")
+
+                # 合并 market_quotes 实时数据（如今天有实时快照则追加一行）
+                df = self._merge_realtime_data(df, symbol)
+
                 stock_name = f'股票{symbol}'
                 if 'name' in df.columns and not df['name'].empty:
                     stock_name = df['name'].iloc[0]
@@ -722,6 +914,8 @@ class DataSourceManager:
                 if provider:
                     stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                     stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
+                # 合并实时行情
+                cached_data = self._merge_realtime_data(cached_data, symbol)
                 return self._format_stock_data_response(cached_data, symbol, stock_name, start_date, end_date)
 
             provider = self._get_tushare_adapter()
@@ -732,6 +926,11 @@ class DataSourceManager:
                 self._save_to_cache(symbol, data, start_date, end_date)
                 stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                 stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
+                # 合并实时行情
+                logger.info(f"原始数据： {data.tail()}")
+                data = self._merge_realtime_data(data, symbol)
+                logger.info(f"合并后的数据， {data.tail()}")
+                
                 result = self._format_stock_data_response(data, symbol, stock_name, start_date, end_date)
                 duration = time.time() - start_time
                 logger.info(f"🔍 [DataSourceManager详细日志] 调用完成，耗时: {duration:.3f}秒")
@@ -754,6 +953,8 @@ class DataSourceManager:
             if data is not None and not data.empty:
                 stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
                 stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
+                # 合并实时行情
+                data = self._merge_realtime_data(data, symbol)
                 result = self._format_stock_data_response(data, symbol, stock_name, start_date, end_date)
                 logger.info(f"✅ [AKShare] 已计算技术指标: MA5/10/20/60, MACD, RSI, BOLL")
                 return result
@@ -771,6 +972,8 @@ class DataSourceManager:
         if data is not None and not data.empty:
             stock_info = run_async_safe(provider.get_stock_basic_info(symbol))
             stock_name = stock_info.get('name', f'股票{symbol}') if stock_info else f'股票{symbol}'
+            # 合并实时行情
+            data = self._merge_realtime_data(data, symbol)
             result = self._format_stock_data_response(data, symbol, stock_name, start_date, end_date)
             logger.info(f"✅ [BaoStock] 已计算技术指标: MA5/10/20/60, MACD, RSI, BOLL")
             return result
