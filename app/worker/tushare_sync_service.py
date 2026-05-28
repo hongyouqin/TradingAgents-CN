@@ -616,6 +616,7 @@ class TushareSyncService:
 
     # ==================== 历史数据同步 ====================
 
+
     async def sync_historical_data(
         self,
         symbols: List[str] = None,
@@ -628,18 +629,7 @@ class TushareSyncService:
     ) -> Dict[str, Any]:
         """
         同步历史数据
-
-        Args:
-            symbols: 股票代码列表
-            start_date: 开始日期
-            end_date: 结束日期
-            incremental: 是否增量同步
-            all_history: 是否同步所有历史数据
-            period: 数据周期 (daily/weekly/monthly)
-            job_id: 任务ID（用于进度跟踪）
-
-        Returns:
-            同步结果统计
+        【修复版】解决盘中空数据、漏同步昨日数据、个股进度不一致问题
         """
         period_name = {"daily": "日线", "weekly": "周线", "monthly": "月线"}.get(period, period)
         logger.info(f"🔄 开始同步{period_name}历史数据...")
@@ -656,23 +646,20 @@ class TushareSyncService:
         try:
             # 1. 获取股票列表（排除退市股票）
             if symbols is None:
-                # 查询所有A股股票（兼容不同的数据结构），排除退市股票
-                # 优先使用 market_info.market，降级到 category 字段
                 cursor = self.db.stock_basic_info.find(
                     {
                         "$and": [
                             {
                                 "$or": [
-                                    {"market_info.market": "CN"},  # 新数据结构
-                                    {"category": "stock_cn"},      # 旧数据结构
-                                    {"market": {"$in": ["主板", "创业板", "科创板", "北交所"]}}  # 按市场类型
+                                    {"market_info.market": "CN"},
+                                    {"category": "stock_cn"},
+                                    {"market": {"$in": ["主板", "创业板", "科创板", "北交所"]}}
                                 ]
                             },
-                            # 排除退市股票
                             {
                                 "$or": [
-                                    {"status": {"$ne": "D"}},  # status 不是 D（退市）
-                                    {"status": {"$exists": False}}  # 或者 status 字段不存在
+                                    {"status": {"$ne": "D"}},
+                                    {"status": {"$exists": False}}
                                 ]
                             }
                         ]
@@ -684,9 +671,24 @@ class TushareSyncService:
 
             stats["total_processed"] = len(symbols)
 
-            # 2. 确定全局结束日期
+            # ==============================================
+            # 🔥 核心修复1：自动修正结束日期，永远只同步【已收盘的完整交易日】
+            # 盘中自动切为昨日，周末节假日自动回退到最后交易日
+            # ==============================================
             if not end_date:
-                end_date = datetime.now().strftime('%Y-%m-%d')
+                # 使用北京时间判断是否已收盘（15:00）
+                beijing_tz = timezone(timedelta(hours=8))
+                now_bj = datetime.now(beijing_tz)
+                # A股收盘15:00，15点前视为当日未收盘，不同步今日数据
+                if now_bj.hour < 15:
+                    end_date = (now_bj - timedelta(days=1)).strftime('%Y-%m-%d')
+                else:
+                    end_date = now_bj.strftime('%Y-%m-%d')
+                # 如果算出来是周末，继续回退到周五
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                while end_dt.weekday() >= 5:  # 5=周六, 6=周日
+                    end_dt -= timedelta(days=1)
+                end_date = end_dt.strftime('%Y-%m-%d')
 
             # 3. 确定全局起始日期（仅用于日志显示）
             global_start_date = start_date
@@ -701,18 +703,16 @@ class TushareSyncService:
             logger.info(f"📊 历史数据同步: 结束日期={end_date}, 股票数量={len(symbols)}, 模式={'增量' if incremental else '全量'}")
 
             # 4. 批量处理
+            today_str = datetime.now().strftime("%Y-%m-%d")
             for i, symbol in enumerate(symbols):
-                # 记录单个股票开始时间
                 stock_start_time = datetime.now()
 
                 try:
-                    # 检查是否需要退出
                     if job_id and await self._should_stop(job_id):
                         logger.warning(f"⚠️ 任务 {job_id} 收到停止信号，正在退出...")
                         stats["stopped"] = True
                         break
 
-                    # 速率限制
                     await self.rate_limiter.acquire()
 
                     # 确定该股票的起始日期
@@ -721,9 +721,19 @@ class TushareSyncService:
                         if all_history:
                             symbol_start_date = "1990-01-01"
                         elif incremental:
-                            # 增量同步：获取该股票的最后日期
                             symbol_start_date = await self._get_last_sync_date(symbol)
                             logger.debug(f"📅 {symbol}: 从 {symbol_start_date} 开始同步")
+
+                            # ==============================================
+                            # 🔥 核心修复2：增量边界拦截
+                            # 如果个股起始日期 >= 可同步结束日期 → 说明数据已是最新，直接跳过
+                            # 彻底解决：已更新完成还请求API、报空数据警告
+                            # ==============================================
+                            if symbol_start_date > end_date:
+                                stats["success_count"] += 1
+                                stock_duration = (datetime.now() - stock_start_time).total_seconds()
+                                # logger.info(f"⏭️ {symbol}: 数据已是最新，无需同步 ({stock_duration:.2f}s)")
+                                continue
                         else:
                             symbol_start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
 
@@ -733,13 +743,12 @@ class TushareSyncService:
                         f"start={symbol_start_date}, end={end_date}, period={period}"
                     )
 
-                    # ⏱️ 性能监控：API 调用
+                    # 请求数据
                     api_start = datetime.now()
                     df = await self.provider.get_historical_data(symbol, symbol_start_date, end_date, period=period)
                     api_duration = (datetime.now() - api_start).total_seconds()
 
                     if df is not None and not df.empty:
-                        # ⏱️ 性能监控：数据保存
                         save_start = datetime.now()
                         records_saved = await self._save_historical_data(symbol, df, period=period)
                         save_duration = (datetime.now() - save_start).total_seconds()
@@ -747,7 +756,6 @@ class TushareSyncService:
                         stats["success_count"] += 1
                         stats["total_records"] += records_saved
 
-                        # 计算单个股票耗时
                         stock_duration = (datetime.now() - stock_start_time).total_seconds()
                         logger.info(
                             f"✅ {symbol}: 保存 {records_saved} 条{period_name}记录，"
@@ -756,32 +764,22 @@ class TushareSyncService:
                         )
                     else:
                         stock_duration = (datetime.now() - stock_start_time).total_seconds()
-                        logger.warning(
-                            f"⚠️ {symbol}: 无{period_name}数据 "
-                            f"(start={symbol_start_date}, end={end_date})，耗时 {stock_duration:.2f}秒"
+                        stats["success_count"] += 1
+                        logger.info(
+                            f"✅ {symbol}: 区间内无新增{period_name}数据（已最新），耗时 {stock_duration:.2f}秒"
                         )
 
-                    # 每个股票都更新进度
+                    # 更新进度
                     progress_percent = int(((i + 1) / len(symbols)) * 100)
-
-                    # 更新任务进度
                     if job_id:
-                        await self._update_progress(
-                            job_id,
-                            progress_percent,
-                            f"正在同步 {symbol} ({i + 1}/{len(symbols)})"
-                        )
+                        try:
+                            await self._update_progress(job_id, progress_percent, f"正在同步 {symbol} ({i + 1}/{len(symbols)})")
+                        except Exception:
+                            pass
 
-                    # 每50个股票输出一次详细日志
+                    # 阶段性日志
                     if (i + 1) % 50 == 0 or (i + 1) == len(symbols):
-                        logger.info(f"📈 {period_name}数据同步进度: {i + 1}/{len(symbols)} ({progress_percent}%) "
-                                   f"(成功: {stats['success_count']}, 记录: {stats['total_records']})")
-
-                        # 输出速率限制器统计
-                        limiter_stats = self.rate_limiter.get_stats()
-                        logger.info(f"   速率限制: {limiter_stats['current_calls']}/{limiter_stats['max_calls']}次, "
-                                   f"等待次数: {limiter_stats['total_waits']}, "
-                                   f"总等待时间: {limiter_stats['total_wait_time']:.1f}秒")
+                        logger.info(f"📈 {period_name}同步进度: {i+1}/{len(symbols)} ({progress_percent}%) | 成功:{stats['success_count']} 新增记录:{stats['total_records']}")
 
                 except Exception as e:
                     import traceback
@@ -796,34 +794,24 @@ class TushareSyncService:
                     })
                     logger.error(
                         f"❌ {symbol} {period_name}数据同步失败\n"
-                        f"   参数: start={symbol_start_date if 'symbol_start_date' in locals() else 'N/A'}, "
-                        f"end={end_date}, period={period}\n"
-                        f"   错误类型: {type(e).__name__}\n"
-                        f"   错误信息: {str(e)}\n"
-                        f"   堆栈跟踪:\n{error_details}"
+                        f"   参数: start={symbol_start_date if 'symbol_start_date' in locals() else 'N/A'}, end={end_date}\n"
+                        f"   错误: {str(e)}\n{error_details}"
                     )
 
-            # 4. 完成统计
+            # 统计收尾
             stats["end_time"] = datetime.utcnow()
             stats["duration"] = (stats["end_time"] - stats["start_time"]).total_seconds()
 
-            logger.info(f"✅ {period_name}数据同步完成: "
-                       f"股票 {stats['success_count']}/{stats['total_processed']}, "
-                       f"记录 {stats['total_records']} 条, "
-                       f"错误 {stats['error_count']} 个, "
-                       f"耗时 {stats['duration']:.2f} 秒")
+            logger.info(f"✅ {period_name}历史数据同步完成: "
+                    f"总数{stats['total_processed']} | 成功{stats['success_count']} | "
+                    f"新增记录{stats['total_records']} | 异常{stats['error_count']} | 耗时{stats['duration']:.2f}s")
 
             return stats
 
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            logger.error(
-                f"❌ 历史数据同步失败（外层异常）\n"
-                f"   错误类型: {type(e).__name__}\n"
-                f"   错误信息: {str(e)}\n"
-                f"   堆栈跟踪:\n{error_details}"
-            )
+            logger.error(f"❌ 历史数据同步任务崩溃\n{str(e)}\n{error_details}")
             stats["errors"].append({
                 "error": str(e),
                 "error_type": type(e).__name__,
@@ -831,6 +819,7 @@ class TushareSyncService:
                 "traceback": error_details
             })
             return stats
+
 
     async def _save_historical_data(self, symbol: str, df, period: str = "daily") -> int:
         """保存历史数据到数据库"""
@@ -877,8 +866,15 @@ class TushareSyncService:
                         next_date = last_date_obj + timedelta(days=1)
                         return next_date.strftime('%Y-%m-%d')
                     except:
-                        # 如果日期格式不对，直接返回
-                        return latest_date
+                        # 兼容 YYYYMMDD 格式（如 '20260527'）
+                        cleaned = str(latest_date).replace('-', '')
+                        if len(cleaned) == 8 and cleaned.isdigit():
+                            last_date_obj = datetime.strptime(cleaned, '%Y%m%d')
+                            next_date = last_date_obj + timedelta(days=1)
+                            return next_date.strftime('%Y-%m-%d')
+                        # 实在无法解析则直接返回原始值
+                        logger.warning(f"⚠️ {symbol}: 无法解析日期格式 '{latest_date}'，直接使用")
+                        return str(latest_date)
                 else:
                     # 🔥 没有历史数据时，从上市日期开始全量同步
                     stock_info = await self.db.stock_basic_info.find_one(
