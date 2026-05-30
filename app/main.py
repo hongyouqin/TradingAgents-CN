@@ -19,6 +19,7 @@ from app.core.database import init_db, close_db
 from app.core.logging_config import setup_logging
 from app.routers import admin_stats_api, auth_db as auth, analysis, kanban_router, payment, screening, queue, sign_router, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tet, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite, agent_forecast as agent_forecast_router, report_template as report_template_router
 from app.routers import sync as sync_router, multi_source_sync
+from app.routers import expense_ledger as expense_ledger_router
 from app.routers import stocks as stocks_router
 from app.routers import stock_data as stock_data_router
 from app.routers import stock_sync as stock_sync_router
@@ -463,6 +464,8 @@ async def lifespan(app: FastAPI):
             logger.info(f"⏸️ Tushare历史数据同步已添加但暂停: {settings.TUSHARE_HISTORICAL_SYNC_CRON}")
         else:
             logger.info(f"📊 Tushare历史数据同步已配置: {settings.TUSHARE_HISTORICAL_SYNC_CRON}")
+            
+        
 
         # 财务数据同步任务
         scheduler.add_job(
@@ -849,6 +852,7 @@ app.include_router(social_media.router, tags=["social-media"])
 app.include_router(internal_messages.router, tags=["internal-messages"])
 app.include_router(admin_stats_api.router, prefix="/api", tags=["管理员-统计大盘"])
 app.include_router(sign_router.router, prefix="/api", tags=["签到"])
+app.include_router(expense_ledger_router.router, tags=["支出账本"])
 
 
 @app.get("/")
