@@ -370,16 +370,17 @@ async def lifespan(app: FastAPI):
                 logger.info(f"📅 Stock basics sync scheduled daily at {settings.SYNC_STOCK_BASICS_TIME} ({settings.TIMEZONE})")
 
         # 实时行情入库任务（每N秒），内部自判交易时段
-        if settings.QUOTES_INGEST_ENABLED:
-            quotes_ingestion = QuotesIngestionService()
-            await quotes_ingestion.ensure_indexes()
-            scheduler.add_job(
-                quotes_ingestion.run_once,  # coroutine function; AsyncIOScheduler will await it
-                IntervalTrigger(seconds=settings.QUOTES_INGEST_INTERVAL_SECONDS, timezone=settings.TIMEZONE),
-                id="quotes_ingestion_service",
-                name="实时行情入库服务"
-            )
-            logger.info(f"⏱ 实时行情入库任务已启动: 每 {settings.QUOTES_INGEST_INTERVAL_SECONDS}s")
+        # 禁用QuotesIngestionService，因为已经有了Tushare同步
+        # if settings.QUOTES_INGEST_ENABLED:
+        #     quotes_ingestion = QuotesIngestionService()
+        #     await quotes_ingestion.ensure_indexes()
+        #     scheduler.add_job(
+        #         quotes_ingestion.run_once,  # coroutine function; AsyncIOScheduler will await it
+        #         IntervalTrigger(seconds=settings.QUOTES_INGEST_INTERVAL_SECONDS, timezone=settings.TIMEZONE),
+        #         id="quotes_ingestion_service",
+        #         name="实时行情入库服务"
+        #     )
+        #     logger.info(f"⏱ 实时行情入库任务已启动: 每 {settings.QUOTES_INGEST_INTERVAL_SECONDS}s")
 
         # Tushare统一数据同步任务配置
         logger.info(f"🔄 配置Tushare统一数据同步任务... 总开关= {settings.TUSHARE_UNIFIED_ENABLED}")

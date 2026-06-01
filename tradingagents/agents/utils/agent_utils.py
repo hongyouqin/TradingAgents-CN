@@ -1046,7 +1046,7 @@ class Toolkit:
     # ============================
     @staticmethod
     @tool
-    @log_tool_call(tool_name="get_stock_market_data_unified", log_args=True)
+    @log_tool_call(tool_name="ATrendEmotionTiming", log_args=True)
     def calculate_tet_indicators(stock_code: str, start_date: str, end_date: str):
         """
         计算 Trend-Emotion-Timing 四大指标
