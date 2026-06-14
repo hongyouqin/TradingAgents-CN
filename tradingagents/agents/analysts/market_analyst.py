@@ -123,51 +123,7 @@ def create_market_analyst(llm, toolkit):
         market_info = StockUtils.get_market_info(ticker)
         company_name = _get_company_name(ticker, market_info)
 
-        # ====================== TET 指标计算 ======================
-        tet_analysis_section = ""
-        try:
-            tet_tool = toolkit.calculate_tet_indicators
-            tet_result = tet_tool.invoke({
-                "stock_code": ticker,
-                "start_date": start_date_5y,
-                "end_date": current_date
-            })
-            if tet_result and isinstance(tet_result, dict):
-                tet_analysis_section = f"""
-## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）【精准计算·核心依据】
-### 1. 趋势得分（Trend-Score）: {tet_result['trend_score']}
-### 2. 情绪指数（Emotion-Index）: {tet_result['emotion_index']}
-### 3. 锚定趋势得分（Anchored Trend-Score）: {tet_result['anchored_trend_score']}
-### 4. 时机指标（Timing-Indicator）: {tet_result['timing_indicator']}
-### 👉 系统建议: {tet_result['action']}
-⚠️ 规则：AI 不得擅自修改量化结论，必须结合布林带、量价综合判断
-"""
-                logger.info("✅ TET 计算成功")
-                logger.info(f"tet_result = {tet_result}")
-            else:
-                tet_analysis_section = """
-## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）【AI规则推演】
-### 1. 趋势得分：-1~1 趋势强弱
-### 2. 情绪指数：-1~1 超买超卖
-### 3. 锚定趋势：剔除噪音的中期趋势
-### 4. 时机指标 = 锚定趋势 − 情绪指数
-   - >1.0 买入机会
-   - < -1.0 卖出风险
-   - 中间观望
-"""
-        except Exception as e:
-            tet_analysis_section = """
-## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）【AI规则推演】
-### 1. 趋势得分：-1~1 趋势强弱
-### 2. 情绪指数：-1~1 超买超卖
-### 3. 锚定趋势：剔除噪音的中期趋势
-### 4. 时机指标 = 锚定趋势 − 情绪指数
-   - >1.0 买入机会
-   - < -1.0 卖出风险
-   - 中间观望
-"""
-            logger.warning(f"⚠️ TET 计算异常: {str(e)[:80]}")
-
+        # ===== TET 指标已集成到 get_stock_market_data_unified 返回数据中，无需单独计算 =====
         tools = [toolkit.get_stock_market_data_unified]
 
         # ====================== 【关键修改】加入布林带实盘铁律 ======================
@@ -199,7 +155,6 @@ def create_market_analyst(llm, toolkit):
                     "## 📊 股票基本信息\n"
                     "## 📦 量价关系分析\n"
                     "## 📈 传统技术指标（均线、MACD、RSI、布林带）\n"
-                    "{tet_section}\n"
                     "## 📉 短中期趋势\n"
                     "## 💡 投资建议（结合布林形态 + TET）\n"
                     "\n"
@@ -229,7 +184,6 @@ def create_market_analyst(llm, toolkit):
         prompt = prompt.partial(market_name=market_info['market_name'])
         prompt = prompt.partial(currency_name=market_info['currency_name'])
         prompt = prompt.partial(currency_symbol=market_info['currency_symbol'])
-        prompt = prompt.partial(tet_section=tet_analysis_section)
 
         logger.info(f"📊 [市场分析师] LLM类型: {llm.__class__.__name__}")
         logger.info(f"📊 [市场分析师] LLM模型: {getattr(llm, 'model_name', 'unknown')}")
@@ -295,7 +249,6 @@ def create_market_analyst(llm, toolkit):
 ## 一、基本信息
 ## 二、量价分析
 ## 三、传统指标（布林带重点）
-{tet_analysis_section}
 ## 四、趋势判断
 ## 五、操作建议（实战）
 """

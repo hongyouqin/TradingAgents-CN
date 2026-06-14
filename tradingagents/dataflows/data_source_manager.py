@@ -568,6 +568,99 @@ class DataSourceManager:
             logger.error(f"❌ [实时合并] {symbol} 合并失败: {e}", exc_info=True)
             return df
 
+    def _fetch_hs300_data(self, start_date, end_date) -> pd.DataFrame:
+        """获取沪深300指数日线数据，用于 TET 计算中的基准对比信号。"""
+        # 方式1: Tushare（优先，与原版 calculate_tet_indicators 一致）
+        try:
+            token = os.getenv('TUSHARE_TOKEN')
+            if token:
+                import tushare as ts
+                ts.set_token(token.strip().strip('"').strip("'"))
+                pro = ts.pro_api()
+                start_fmt = start_date.replace("-", "") if isinstance(start_date, str) else start_date.strftime("%Y%m%d")
+                end_fmt = end_date.replace("-", "") if isinstance(end_date, str) else end_date.strftime("%Y%m%d")
+                df = pro.index_daily(ts_code='000300.SH', start_date=start_fmt, end_date=end_fmt,
+                                     fields='trade_date,close')
+                if df is not None and not df.empty:
+                    df = df.sort_values('trade_date').reset_index(drop=True)
+                    df['trade_date'] = pd.to_datetime(df['trade_date'])
+                    logger.info(f"✅ [TET-HS300] Tushare获取沪深300成功: {len(df)}条")
+                    return df
+        except Exception as e:
+            logger.warning(f"⚠️ [TET-HS300] Tushare获取失败: {e}")
+
+        # 方式2: AKShare（备用，免费无需API Key）
+        try:
+            import akshare as ak
+            df = ak.stock_zh_index_daily_em(symbol="sh000300")
+            if df is not None and not df.empty:
+                df['trade_date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+                s = pd.to_datetime(start_date).strftime('%Y-%m-%d') if not isinstance(start_date, str) else start_date
+                e = pd.to_datetime(end_date).strftime('%Y-%m-%d') if not isinstance(end_date, str) else end_date
+                df = df[(df['trade_date'] >= s) & (df['trade_date'] <= e)]
+                df = df[['trade_date', 'close']].sort_values('trade_date').reset_index(drop=True)
+                logger.info(f"✅ [TET-HS300] AKShare获取沪深300成功: {len(df)}条")
+                return df
+        except Exception as e:
+            logger.warning(f"⚠️ [TET-HS300] AKShare获取失败: {e}")
+
+        logger.warning("⚠️ [TET-HS300] 所有方式均无法获取沪深300数据")
+        return pd.DataFrame(columns=['trade_date', 'close'])
+
+    def _compute_tet_section(self, data: pd.DataFrame) -> str:
+        """
+        使用 ATrendEmotionTiming 从股票 DataFrame 计算 TET（趋势-情绪-时机）指标。
+        自动获取沪深300指数数据作为基准对比信号，与原始 calculate_tet_indicators 保持一致。
+        """
+        try:
+            from tradingagents.utils.trend_emotion_timing import ATrendEmotionTiming
+
+            # 统一列名：部分路径会将 date 设为索引或重命名为 trade_date
+            df = data.copy()
+            # 处理 date 是索引的情况（Tushare Provider 将 date 设为索引）
+            if df.index.name == 'date' or 'date' in str(df.index):
+                df = df.reset_index()
+            # trade_date 列 → date 列
+            if 'trade_date' in df.columns and 'date' not in df.columns:
+                df = df.rename(columns={'trade_date': 'date'})
+            # volume 列 → vol 列
+            if 'volume' in df.columns and 'vol' not in df.columns:
+                df = df.rename(columns={'volume': 'vol'})
+
+            # 准备股票数据：date → trade_date，并选择标准列
+            stock_df = df[['date', 'open', 'high', 'low', 'close', 'vol']].copy()
+            stock_df = stock_df.rename(columns={'date': 'trade_date'})
+
+            # 获取沪深300指数数据
+            hs300_df = self._fetch_hs300_data(
+                stock_df['trade_date'].iloc[0],
+                stock_df['trade_date'].iloc[-1]
+            )
+
+            # 计算 TET
+            tet = ATrendEmotionTiming("tet_calc")
+            tet.load_data(stock_df, hs300_df)
+            tet.calculate_trend_score()
+            tet.calculate_emotion_index()
+            tet.calculate_anchored_trend()
+            tet.calculate_timing()
+            latest = tet.get_latest()
+
+            section = f"""
+## 🧭 趋势-情绪-时机量化分析（Trend-Emotion-Timing）【精准计算·核心依据】
+### 1. 趋势得分（Trend-Score）: {latest['trend_score']}
+### 2. 情绪指数（Emotion-Index）: {latest['emotion_index']}
+### 3. 锚定趋势得分（Anchored Trend-Score）: {latest['anchored_trend_score']}
+### 4. 时机指标（Timing-Indicator）: {latest['timing_indicator']}
+### 👉 系统建议: {latest['action']}
+⚠️ 规则：AI 不得擅自修改量化结论，必须结合布林带、量价综合判断
+"""
+            logger.info(f"✅ TET 计算成功 (ATrendEmotionTiming): {latest}")
+            return section
+        except Exception as e:
+            logger.warning(f"⚠️ TET 计算异常: {e}")
+            return ""
+
     def _format_stock_data_response(self, data: pd.DataFrame, symbol: str, stock_name: str, start_date: str, end_date: str) -> str:
         try:
             original_data_count = len(data)
@@ -700,6 +793,10 @@ class DataSourceManager:
             result += f"   平均价: ¥{display_data['close'].mean():.2f}\n"
             volume_value = self._get_volume_safely(display_data)
             result += f"   平均成交量: {volume_value:,.0f}股\n"
+
+            # 计算 TET（趋势-情绪-时机）指标并追加
+            result += self._compute_tet_section(data)
+
             return result
         except Exception as e:
             logger.error(f"❌ 格式化数据响应失败: {e}", exc_info=True)

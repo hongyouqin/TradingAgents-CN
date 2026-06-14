@@ -7,7 +7,7 @@ from app.services.power_account_service import PowerAccountService
 from app.daos import sign_stats_dao
 
 # 赠送的算力数量
-SIGN_REWARD = 1.5
+SIGN_REWARD = 1
 
 class SignService:
     def __init__(self, db, power_account_service : PowerAccountService):
