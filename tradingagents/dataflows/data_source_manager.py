@@ -665,6 +665,8 @@ class DataSourceManager:
         try:
             original_data_count = len(data)
             logger.info(f"📊 [技术指标] 开始计算技术指标，原始数据: {original_data_count}条")
+            logger.info(f"{symbol} 合并最初5条={data.head(5)}")
+            logger.info(f"{symbol} 合并最新5条={data.tail(5)}")
             if 'date' in data.columns:
                 data = data.sort_values('date')
 

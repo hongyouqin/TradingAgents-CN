@@ -398,6 +398,7 @@ class QuotesIngestionService:
                         "pre_close": q.get("pre_close"),
                         "trade_date": trade_date,
                         "updated_at": updated_at,
+                        "data_source": source or "unknown",
                     }},
                     upsert=True,
                 )

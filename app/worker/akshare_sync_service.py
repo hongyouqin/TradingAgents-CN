@@ -262,10 +262,7 @@ class AKShareSyncService:
             # 1. 确定要同步的股票列表
             if symbols is None:
                 # 从数据库获取所有上市状态的股票代码（排除退市股票）
-                basic_info_cursor = self.db.stock_basic_info.find(
-                    {"list_status": "L"},  # 只获取上市状态的股票
-                    {"code": 1}
-                )
+                basic_info_cursor = self.db.stock_basic_info.find({})
                 symbols = [doc["code"] async for doc in basic_info_cursor]
 
             if not symbols:
@@ -336,16 +333,19 @@ class AKShareSyncService:
                                     else:
                                         quotes_data = quotes
 
+                                    # 🔥 规范化字段（去除数据源特有冗余字段）
+                                    from app.services.quotes_normalizer import normalize_quotes_data
+                                    normalized = normalize_quotes_data(quotes_data, data_source="akshare")
                                     # 确保 symbol 和 code 字段存在
-                                    if "symbol" not in quotes_data:
-                                        quotes_data["symbol"] = symbol
-                                    if "code" not in quotes_data:
-                                        quotes_data["code"] = symbol
+                                    if "symbol" not in normalized:
+                                        normalized["symbol"] = symbol
+                                    if "code" not in normalized:
+                                        normalized["code"] = symbol
 
                                     # 更新到数据库
                                     await self.db.market_quotes.update_one(
                                         {"code": symbol},
-                                        {"$set": quotes_data},
+                                        {"$set": normalized},
                                         upsert=True
                                     )
                                     stats["success_count"] += 1
@@ -417,16 +417,19 @@ class AKShareSyncService:
                         else:
                             quotes_data = quotes
 
+                        # 🔥 规范化字段（去除数据源特有冗余字段）
+                        from app.services.quotes_normalizer import normalize_quotes_data
+                        normalized = normalize_quotes_data(quotes_data, data_source="akshare")
                         # 确保 symbol 和 code 字段存在
-                        if "symbol" not in quotes_data:
-                            quotes_data["symbol"] = symbol
-                        if "code" not in quotes_data:
-                            quotes_data["code"] = symbol
+                        if "symbol" not in normalized:
+                            normalized["symbol"] = symbol
+                        if "code" not in normalized:
+                            normalized["code"] = symbol
 
                         # 更新到数据库
                         await self.db.market_quotes.update_one(
                             {"code": symbol},
-                            {"$set": quotes_data},
+                            {"$set": normalized},
                             upsert=True
                         )
                         batch_stats["success_count"] += 1
@@ -500,25 +503,30 @@ class AKShareSyncService:
                 else:
                     quotes_data = quotes
 
+                # 🔥 规范化字段（去除数据源特有冗余字段）
+                from app.services.quotes_normalizer import normalize_quotes_data
+                normalized = normalize_quotes_data(quotes_data, data_source="akshare")
                 # 确保 symbol 字段存在
-                if "symbol" not in quotes_data:
-                    quotes_data["symbol"] = symbol
+                if "symbol" not in normalized:
+                    normalized["symbol"] = symbol
+                if "code" not in normalized:
+                    normalized["code"] = symbol
 
-                # 🔥 打印即将保存到数据库的数据
+                # 🔥 打印即将保存到数据库的数据（使用规范字段名）
                 logger.info(f"💾 准备保存 {symbol} 行情到数据库:")
-                logger.info(f"   - 最新价(price): {quotes_data.get('price')}")
-                logger.info(f"   - 最高价(high): {quotes_data.get('high')}")
-                logger.info(f"   - 最低价(low): {quotes_data.get('low')}")
-                logger.info(f"   - 开盘价(open): {quotes_data.get('open')}")
-                logger.info(f"   - 昨收价(pre_close): {quotes_data.get('pre_close')}")
-                logger.info(f"   - 成交量(volume): {quotes_data.get('volume')}")
-                logger.info(f"   - 成交额(amount): {quotes_data.get('amount')}")
-                logger.info(f"   - 涨跌幅(change_percent): {quotes_data.get('change_percent')}%")
+                logger.info(f"   - 最新价(close): {normalized.get('close')}")
+                logger.info(f"   - 最高价(high): {normalized.get('high')}")
+                logger.info(f"   - 最低价(low): {normalized.get('low')}")
+                logger.info(f"   - 开盘价(open): {normalized.get('open')}")
+                logger.info(f"   - 昨收价(pre_close): {normalized.get('pre_close')}")
+                logger.info(f"   - 成交量(volume): {normalized.get('volume')}")
+                logger.info(f"   - 成交额(amount): {normalized.get('amount')}")
+                logger.info(f"   - 涨跌幅(pct_chg): {normalized.get('pct_chg')}%")
 
                 # 更新到数据库
                 result = await self.db.market_quotes.update_one(
                     {"code": symbol},
-                    {"$set": quotes_data},
+                    {"$set": normalized},
                     upsert=True
                 )
 

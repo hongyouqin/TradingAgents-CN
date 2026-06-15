@@ -342,8 +342,8 @@ class TushareSyncService:
 
             for symbol, quote_data in quotes_map.items():
                 try:
-                    # 保存到数据库
-                    result = await self.stock_service.update_market_quotes(symbol, quote_data)
+                    # 保存到数据库（规范化字段）
+                    result = await self.stock_service.update_market_quotes(symbol, quote_data, data_source="tushare")
                     if result:
                         success_count += 1
                     else:
@@ -603,7 +603,7 @@ class TushareSyncService:
                 else:
                     quotes_data = quotes
 
-                return await self.stock_service.update_market_quotes(symbol, quotes_data)
+                return await self.stock_service.update_market_quotes(symbol, quotes_data, data_source="tushare")
             return False
         except Exception as e:
             error_msg = str(e)

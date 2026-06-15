@@ -440,17 +440,32 @@ async def lifespan(app: FastAPI):
             logger.info(f"📅 Tushare基础信息同步已配置: {settings.TUSHARE_BASIC_INFO_SYNC_CRON}")
 
         # 实时行情同步任务
+        # scheduler.add_job(
+        #     run_tushare_quotes_sync,
+        #     CronTrigger.from_crontab(settings.TUSHARE_QUOTES_SYNC_CRON, timezone=settings.TIMEZONE),
+        #     id="tushare_quotes_sync",
+        #     name="实时行情同步（Tushare）"
+        # )
+        
+        # 这里使用akshare来替代thshare，因为thshare实时数据现在要独立收费，1000元一次，太贵了
         scheduler.add_job(
-            run_tushare_quotes_sync,
+            run_akshare_quotes_sync,
             CronTrigger.from_crontab(settings.TUSHARE_QUOTES_SYNC_CRON, timezone=settings.TIMEZONE),
-            id="tushare_quotes_sync",
-            name="实时行情同步（Tushare）"
+            id="akshare_quotes_sync",
+            name="实时行情同步（AKShare）"
         )
+        
+        
+        
         if not (settings.TUSHARE_UNIFIED_ENABLED and settings.TUSHARE_QUOTES_SYNC_ENABLED):
             scheduler.pause_job("tushare_quotes_sync")
             logger.info(f"⏸️ Tushare行情同步已添加但暂停: {settings.TUSHARE_QUOTES_SYNC_CRON}")
         else:
             logger.info(f"📈 Tushare行情同步已配置: {settings.TUSHARE_QUOTES_SYNC_CRON}")
+            
+        # 手动触发一下
+        # asyncio.create_task(run_akshare_quotes_sync(force=True))
+        
 
         # 历史数据同步任务
         scheduler.add_job(

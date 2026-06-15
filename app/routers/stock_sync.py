@@ -81,7 +81,8 @@ async def _sync_latest_to_market_quotes(symbol: str) -> None:
         "pct_chg": latest_doc.get("pct_chg"),
         "pre_close": latest_doc.get("pre_close"),
         "trade_date": latest_doc.get("trade_date"),
-        "updated_at": datetime.utcnow()
+        "updated_at": datetime.utcnow(),
+        "data_source": "historical_sync",
     }
 
     # 🔥 日志：记录同步的成交量

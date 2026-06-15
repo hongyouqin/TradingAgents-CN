@@ -16,6 +16,7 @@ from app.models.stock_models import (
     ExchangeType,
     CurrencyType
 )
+from app.services.quotes_normalizer import normalize_quotes_data
 
 logger = logging.getLogger(__name__)
 
@@ -235,13 +236,15 @@ class StockDataService:
     async def update_market_quotes(
         self,
         symbol: str,
-        quote_data: Dict[str, Any]
+        quote_data: Dict[str, Any],
+        data_source: Optional[str] = None,
     ) -> bool:
         """
         更新实时行情数据
         Args:
             symbol: 6位股票代码
             quote_data: 行情数据
+            data_source: 数据源标识（如 'tushare', 'akshare'），用于规范化
         Returns:
             bool: 更新是否成功
         """
@@ -249,19 +252,19 @@ class StockDataService:
             db = get_mongo_db()
             symbol6 = str(symbol).zfill(6)
 
-            # 添加更新时间
-            quote_data["updated_at"] = datetime.utcnow()
+            # 🔥 规范化：将数据源特有字段映射到标准字段
+            normalized = normalize_quotes_data(quote_data, data_source=data_source)
 
             # 🔥 确保 symbol 和 code 字段都存在（兼容旧索引）
-            if "symbol" not in quote_data:
-                quote_data["symbol"] = symbol6
-            if "code" not in quote_data:
-                quote_data["code"] = symbol6  # code 和 symbol 使用相同的值
+            if "symbol" not in normalized:
+                normalized["symbol"] = symbol6
+            if "code" not in normalized:
+                normalized["code"] = symbol6  # code 和 symbol 使用相同的值
 
             # 执行更新 (使用symbol字段作为查询条件)
             result = await db[self.market_quotes_collection].update_one(
                 {"symbol": symbol6},
-                {"$set": quote_data},
+                {"$set": normalized},
                 upsert=True
             )
 
