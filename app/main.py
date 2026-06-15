@@ -455,10 +455,8 @@ async def lifespan(app: FastAPI):
             name="实时行情同步（AKShare）"
         )
         
-        
-        
         if not (settings.TUSHARE_UNIFIED_ENABLED and settings.TUSHARE_QUOTES_SYNC_ENABLED):
-            scheduler.pause_job("tushare_quotes_sync")
+            scheduler.pause_job("akshare_quotes_sync")
             logger.info(f"⏸️ Tushare行情同步已添加但暂停: {settings.TUSHARE_QUOTES_SYNC_CRON}")
         else:
             logger.info(f"📈 Tushare行情同步已配置: {settings.TUSHARE_QUOTES_SYNC_CRON}")
@@ -527,17 +525,17 @@ async def lifespan(app: FastAPI):
             logger.info(f"📅 AKShare基础信息同步已配置: {settings.AKSHARE_BASIC_INFO_SYNC_CRON}")
 
         # 实时行情同步任务
-        scheduler.add_job(
-            run_akshare_quotes_sync,
-            CronTrigger.from_crontab(settings.AKSHARE_QUOTES_SYNC_CRON, timezone=settings.TIMEZONE),
-            id="akshare_quotes_sync",
-            name="实时行情同步（AKShare）"
-        )
-        if not (settings.AKSHARE_UNIFIED_ENABLED and settings.AKSHARE_QUOTES_SYNC_ENABLED):
-            scheduler.pause_job("akshare_quotes_sync")
-            logger.info(f"⏸️ AKShare行情同步已添加但暂停: {settings.AKSHARE_QUOTES_SYNC_CRON}")
-        else:
-            logger.info(f"📈 AKShare行情同步已配置: {settings.AKSHARE_QUOTES_SYNC_CRON}")
+        # scheduler.add_job(
+        #     run_akshare_quotes_sync,
+        #     CronTrigger.from_crontab(settings.AKSHARE_QUOTES_SYNC_CRON, timezone=settings.TIMEZONE),
+        #     id="akshare_quotes_sync",
+        #     name="实时行情同步（AKShare）"
+        # )
+        # if not (settings.AKSHARE_UNIFIED_ENABLED and settings.AKSHARE_QUOTES_SYNC_ENABLED):
+        #     scheduler.pause_job("akshare_quotes_sync")
+        #     logger.info(f"⏸️ AKShare行情同步已添加但暂停: {settings.AKSHARE_QUOTES_SYNC_CRON}")
+        # else:
+        #     logger.info(f"📈 AKShare行情同步已配置: {settings.AKSHARE_QUOTES_SYNC_CRON}")
 
         # 历史数据同步任务
         scheduler.add_job(
