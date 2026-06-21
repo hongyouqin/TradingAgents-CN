@@ -19,6 +19,7 @@ from app.core.database import init_db, close_db
 from app.core.logging_config import setup_logging
 from app.routers import admin_stats_api, auth_db as auth, analysis, kanban_router, payment, screening, queue, sign_router, sse, health, favorites, config, reports, database, operation_logs, stock_pitch, tags, tet, tushare_init, akshare_init, baostock_init, historical_data, multi_period_sync, financial_data, news_data, social_media, internal_messages, usage_statistics, model_capabilities, cache, logs, wechat_official_account, wechat_qrcode_invite, agent_forecast as agent_forecast_router, report_template as report_template_router
 from app.routers import sync as sync_router, multi_source_sync
+from app.routers import report_chat
 from app.routers import expense_ledger as expense_ledger_router
 from app.routers import stocks as stocks_router
 from app.routers import stock_data as stock_data_router
@@ -271,6 +272,8 @@ async def lifespan(app: FastAPI):
         raise
 
     await init_db()
+    # 注意：init_db() 内部已将 Redis 连接同步到 app.core.redis_client 模块
+    # 无需再单独调用 redis_client.init_redis()
 
     #  配置桥接：将统一配置写入环境变量，供 TradingAgents 核心库使用
     try:
@@ -714,6 +717,7 @@ async def lifespan(app: FastAPI):
 
         # 停止补偿任务循环
         await compensation_service.stop_compensation_loop()
+        # close_db() 会同时关闭 MongoDB 和 Redis（含同步到 redis_client 模块的连接）
         await close_db()
         logger.info("TradingAgents FastAPI backend stopped")
 
@@ -813,7 +817,9 @@ app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(agent_forecast_router.router, prefix="/api", tags=["agent-forecast"])
-app.include_router(reports.router, tags=["reports"])
+app.include_router(reports.router, tags=["reports"]) 
+# ReportChatAgent router
+app.include_router(report_chat.router, prefix="/api/report-chat", tags=["report-chat"])
 app.include_router(report_template_router.router, prefix="/api", tags=["report-template"])
 app.include_router(screening.router, prefix="/api/screening", tags=["screening"])
 app.include_router(queue.router, prefix="/api/queue", tags=["queue"])

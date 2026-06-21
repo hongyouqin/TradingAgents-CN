@@ -201,6 +201,16 @@ async def init_database():
         redis_client = db_manager.redis_client
         redis_pool = db_manager.redis_pool
 
+        # 同步到 app.core.redis_client 模块的全局变量
+        # 这样 SessionStore/RedisService 可以直接使用，避免两次连接
+        try:
+            import app.core.redis_client as _rc
+            _rc.redis_pool = redis_pool
+            _rc.redis_client = redis_client
+            logger.info("🔄 Redis连接已同步到 app.core.redis_client")
+        except Exception as e:
+            logger.warning(f"⚠️ Redis连接同步失败: {e}")
+
         logger.info("🎉 所有数据库连接初始化完成")
 
         # 🔥 初始化数据库视图和索引
