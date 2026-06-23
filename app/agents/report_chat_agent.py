@@ -230,26 +230,34 @@ def build_default_tools() -> ToolRegistry:
 
     from app.services.tools.news_tool import NewsTool
     from app.services.tools.historical_tool import HistoricalTool
-    from app.services.tools.funds_tool import FundsTool
+    from app.services.tools.position_calc_tool import PositionCalcTool
+    from app.services.tools.ema_penetration_tool import EmaPenetrationTool
 
     news = NewsTool()
     hist = HistoricalTool()
-    funds = FundsTool()
+    pos_calc = PositionCalcTool()
+    ema_pen = EmaPenetrationTool()
 
     registry.register(
         "fetch_news",
-        "获取指定股票的近期新闻。参数: symbol(股票代码), limit(条数,默认5), hours_back(回溯小时,默认24)",
-        lambda symbol="", limit=5, hours_back=24: news.fetch_news(symbol or None, limit=limit, hours_back=hours_back),
+        "获取指定股票的近期新闻。参数: symbol(股票代码), limit(条数,默认5), hours_back(回溯小时,默认1个月的)",
+        lambda symbol="", limit=5, hours_back=24*7*4: news.fetch_news(symbol or None, limit=limit, hours_back=hours_back),
     )
     registry.register(
         "fetch_historical",
         "获取指定股票的历史行情数据。参数: symbol(股票代码), period(周期,daily/weekly/monthly,默认daily), limit(条数,默认30)",
-        lambda symbol, period="daily", limit=30: hist.fetch_historical(symbol, period=period, limit=limit),
+        lambda symbol, period="daily", limit=256: hist.fetch_historical(symbol, period=period, limit=limit),
     )
     registry.register(
-        "query_position",
-        "查询指定资金账户的持仓信息。参数: account_id(账户ID)",
-        lambda account_id: funds.query_position(account_id),
+        "calc_trade_size",
+        "资金管理仓位计算工具，根据买入价、止损价、风险系数、总资金计算安全可交易股数。参数: ep(买入价), sp(止损价), rcf(风险系数，0.02代表单笔亏损上限为总资金2%), tc(账户总资金)",
+        # 同步计算函数包装异步执行器，适配框架await
+        lambda ep, sp, rcf, tc: __import__("asyncio").get_event_loop().run_in_executor(None, pos_calc.calc_trade_size, ep, sp, rcf, tc),
+    )
+    registry.register(
+        "calc_ema_penetration",
+        "EMA穿透买入策略分析工具，基于均线穿透方法计算建议买入价。参数: symbol(6位股票代码), fast_ema(快EMA周期,默认13), slow_ema(慢EMA周期,默认26), lookback_period(穿透回溯天数,默认30)",
+        lambda symbol, fast_ema=13, slow_ema=26, lookback_period=30: ema_pen.analyze(symbol, fast_ema=fast_ema, slow_ema=slow_ema, lookback_period=lookback_period),
     )
     # ── 可在此处扩展更多工具 ──
 
@@ -376,7 +384,7 @@ class ReportChatAgent:
         tool_descriptions = self.tools.get_descriptions()
         tool_call, tool_params = self._parse_tool_call(message)
 
-        tracker = TokenTracker()
+        tracker = TokenTracker() 
         reply = ""
         tool_results = []
 

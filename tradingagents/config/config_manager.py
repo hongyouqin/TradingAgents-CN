@@ -438,6 +438,7 @@ class ConfigManager:
         logger.info(f"✅ [Token记录] JSON 文件保存成功: {self.usage_file}")
         return record
     
+  
     def calculate_cost(self, provider: str, model_name: str, input_tokens: int, output_tokens: int) -> tuple[float, str]:
         """
         计算使用成本
@@ -446,22 +447,33 @@ class ConfigManager:
             tuple[float, str]: (成本, 货币单位)
         """
         pricing_configs = self.load_pricing()
-
+        logger.info(f"calculate_cost provider={provider} model_name={model_name} input_token={input_tokens} output_tokens={output_tokens}")
+        
+        # 模型映射：旧模型名 -> 新模型名
+        model_mapping = {
+            "deepseek-v4-flash": "deepseek-chat",
+            "deepseek-v4-pro": "deepseek-reasoner",
+        }
+        
+        
+        # 如果模型在映射中，使用映射后的名称
+        actual_model_name = model_mapping.get(model_name, model_name)
+        if actual_model_name != model_name:
+            logger.info(f"🔄 模型映射: {model_name} -> {actual_model_name}")
+        
+        # 查找定价配置
         for pricing in pricing_configs:
-            if pricing.provider == provider and pricing.model_name == model_name:
+            if pricing.provider == provider and pricing.model_name == actual_model_name:
                 input_cost = (input_tokens / 1000) * pricing.input_price_per_1k
                 output_cost = (output_tokens / 1000) * pricing.output_price_per_1k
                 total_cost = input_cost + output_cost
+                logger.info(f"✅ 找到配置: {provider}/{actual_model_name}, 成本={round(total_cost, 6)}")
                 return round(total_cost, 6), pricing.currency
-
-        # 只在找不到配置时输出调试信息
-        logger.warning(f"⚠️ [calculate_cost] 未找到匹配的定价配置: {provider}/{model_name}")
-        logger.debug(f"⚠️ [calculate_cost] 可用的配置:")
-        for pricing in pricing_configs:
-            logger.debug(f"⚠️ [calculate_cost]   - {pricing.provider}/{pricing.model_name}")
-
+        
+        # 未找到配置
+        logger.warning(f"⚠️ [calculate_cost] 未找到匹配的定价配置: {provider}/{actual_model_name} (原始: {model_name})")
         return 0.0, "CNY"
-    
+  
     def load_settings(self) -> Dict[str, Any]:
         """加载设置，合并.env中的配置"""
         try:

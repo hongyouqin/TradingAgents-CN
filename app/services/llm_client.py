@@ -212,13 +212,15 @@ def _build_llm(
         from app.services.simple_analysis_service import get_provider_and_url_by_model_sync
         from app.core.unified_config import unified_config
 
-        model_name = model or unified_config.get_quick_analysis_model() or "deepseek-chat"
+        model_name = model or "deepseek-chat"
 
         # 获取供应商信息和 API URL
         provider_info = get_provider_and_url_by_model_sync(model_name)
         provider = provider_info.get("provider", "deepseek")
         backend_url = provider_info.get("backend_url", "")
         api_key = provider_info.get("api_key", None)
+        
+        logger.info(f"_build_llm model_name={model_name}; provider={provider}; backend_url={backend_url} api_key={api_key}")
 
         return create_llm_by_provider(
             provider=provider,
