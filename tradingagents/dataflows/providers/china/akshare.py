@@ -648,12 +648,6 @@ class AKShareProvider(BaseStockDataProvider):
                         }
 
                         # 转换为标准化字典（使用匹配后的代码）
-                        # 🔥 获取当前日期（UTC+8）
-                        from datetime import timezone, timedelta
-                        cn_tz = timezone(timedelta(hours=8))
-                        now_cn = datetime.now(cn_tz)
-                        batch_trade_date = now_cn.strftime("%Y-%m-%d")  # 格式：2026-06-24
-
                         quotes_map[matched_code] = {
                             "code": matched_code,
                             "symbol": matched_code,
@@ -675,9 +669,6 @@ class AKShareProvider(BaseStockDataProvider):
                             "pb": quotes_data.get("pb"),  # 市净率
                             "total_mv": quotes_data.get("total_mv") / 1e8 if quotes_data.get("total_mv") else None,  # 总市值（转换为亿元）
                             "circ_mv": quotes_data.get("circ_mv") / 1e8 if quotes_data.get("circ_mv") else None,  # 流通市值（转换为亿元）
-                            # 🔥 修复：新增 trade_date 字段（与 get_stock_quotes 保持一致）
-                            "trade_date": batch_trade_date,  # 交易日期（格式：2026-06-24）
-                            "updated_at": now_cn.isoformat(),  # 更新时间
                             # 扩展字段
                             "full_symbol": self._get_full_symbol(matched_code),
                             "market_info": self._get_market_info(matched_code),
