@@ -153,7 +153,7 @@ class _HttpEmbedder:
 async def call_llm(
     prompt: str,
     model: Optional[str] = None,
-    temperature: float = 0.7,
+    temperature: float = 0.5,
     max_tokens: int = 4096,
     timeout: int = 180,
 ) -> Tuple[str, int]:
@@ -202,7 +202,7 @@ async def call_llm(
 
 def _build_llm(
     model: Optional[str] = None,
-    temperature: float = 0.7,
+    temperature: float = 0.5,
     max_tokens: int = 4096,
     timeout: int = 180,
 ):

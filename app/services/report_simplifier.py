@@ -390,7 +390,7 @@ class ReportSimplifier:
                     provider=llm_config["provider"],
                     model=llm_config["model_name"],
                     backend_url=llm_config["backend_url"],
-                    temperature=0.4,
+                    temperature=0.2,
                     max_tokens=8000,
                     timeout=180,
                     api_key=llm_config["api_key"]
@@ -527,9 +527,9 @@ class ReportSimplifier:
    
     
     async def _generate_html_by_llm(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> tuple[str, str, bool]:
-        """调用LLM生成HTML页面，返回(html_content, raw_response, is_fallback)"""
-        max_retries = 3
-        retry_delay = 1
+        """调用LLM生成HTML页面，失败时重试一次，再失败则使用备用模板"""
+        max_retries = 2
+        retry_delay = 2
         last_response = ""
         is_fallback = False
         
@@ -542,12 +542,9 @@ class ReportSimplifier:
             try:
                 llm_config = self._get_llm_config()
                 
-                # 添加配置检查日志
-                logger.info(f"🔧 LLM配置检查:")
+                logger.info(f"🔧 LLM配置检查 (尝试 {attempt + 1}/{max_retries}):")
                 logger.info(f"  provider: {llm_config.get('provider')}")
                 logger.info(f"  model_name: {llm_config.get('model_name')}")
-                # logger.info(f"  has_api_key: {bool(llm_config.get('api_key'))}")
-                logger.info(f"  backend_url: {llm_config.get('backend_url')}")
                 
                 # 准备增强数据
                 enhanced_data = {
@@ -557,25 +554,33 @@ class ReportSimplifier:
                     **simplified_data
                 }
                 
-                # 格式化提示词
-                prompt = self._html_generation_prompt.format(
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    simplified_data=json.dumps(enhanced_data, ensure_ascii=False, indent=2)
-                )
+                # 第一次使用完整提示词，第二次使用简化提示词
+                if attempt == 0:
+                    prompt = self._html_generation_prompt.format(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        simplified_data=json.dumps(enhanced_data, ensure_ascii=False, indent=2)
+                    )
+                    temperature = 0.3
+                else:
+                    # 第二次：简化提示词，降低生成难度
+                    prompt = self._load_simplified_html_prompt().format(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        simplified_data=json.dumps(enhanced_data, ensure_ascii=False, indent=2)
+                    )
+                    temperature = 0.5
+                    logger.info(f"🔄 使用简化版提示词进行重试")
                 
                 logger.info(f"📝 HTML生成提示词长度: {len(prompt)} 字符")
-                logger.info(f"  模型: {llm_config['model_name']}")
-                logger.info(f"  供应商: {llm_config['provider']}")
                 
-                # 增加超时和token配置
                 llm = create_llm_by_provider(
                     provider=llm_config["provider"],
                     model=llm_config["model_name"],
                     backend_url=llm_config["backend_url"],
-                    temperature=0.4,
-                    max_tokens=8000,  # 增加到8000，确保能生成完整HTML
-                    timeout=300,      # 增加到300秒（5分钟）
+                    temperature=temperature,
+                    max_tokens=8000,
+                    timeout=300,
                     api_key=llm_config["api_key"]
                 )
                 
@@ -606,52 +611,38 @@ class ReportSimplifier:
                 
                 last_response = content
                 logger.info(f"✅ HTML生成响应长度: {len(content)} 字符")
-                logger.info(f"  耗时: {elapsed:.2f}秒")
                 
                 # 保存原始HTML响应到文件
                 await self._save_raw_response_to_file(
                     stock_code,
-                    "html",
+                    f"html_attempt_{attempt + 1}",
                     content
                 )
                 
-                # 记录部分内容用于调试
-                logger.info(f"🔍 HTML响应内容前200字符: {content[:200]}")
-                
                 html_content = self._extract_html_from_response(content)
                 
-                # 验证HTML完整性
-                if "<!DOCTYPE html>" in html_content and "<html" in html_content and "</html>" in html_content:
-                    logger.info(f"✅ HTML验证通过，使用LLM生成的模板")
-                    return html_content, last_response, is_fallback
-                elif "<html" in html_content:
-                    if "<!DOCTYPE html>" not in html_content:
-                        html_content = "<!DOCTYPE html>\n" + html_content
-                    if "</html>" not in html_content:
-                        html_content += "\n</html>"
-                    logger.info(f"⚠️ HTML不完整，已修复，使用LLM生成的模板")
+                if self._validate_html(html_content):
+                    logger.info(f"✅ HTML验证通过 (尝试 {attempt + 1})")
                     return html_content, last_response, is_fallback
                 else:
-                    logger.warning(f"⚠️ 生成的HTML不完整，将在下一次尝试或回退到备用模板")
-                    raise ValueError("生成的HTML不完整")
-                    
-            except asyncio.TimeoutError as e:
-                logger.warning(f"⏰ HTML生成超时 (尝试 {attempt + 1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
-                else:
-                    logger.error("❌ 所有重试都超时，使用备用模板")
-                    is_fallback = True
-                    fallback_html = self._generate_fallback_html(stock_code, stock_name, simplified_data)
-                    return fallback_html, last_response, is_fallback
-                    
+                    logger.warning(f"⚠️ HTML验证失败 (尝试 {attempt + 1})")
+                    if attempt < max_retries - 1:
+                        logger.info(f"🔄 准备重试，等待 {retry_delay} 秒...")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.warning("⚠️ 所有尝试都失败，使用备用模板")
+                        is_fallback = True
+                        fallback_html = self._generate_fallback_html(stock_code, stock_name, simplified_data)
+                        return fallback_html, last_response, is_fallback
+                        
             except Exception as e:
                 logger.warning(f"⚠️ HTML生成失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-                logger.exception(f"详细错误信息:")  # 添加完整堆栈
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    logger.info(f"🔄 错误后重试，等待 {retry_delay} 秒...")
+                    await asyncio.sleep(retry_delay)
                 else:
-                    logger.error("❌ HTML生成失败，使用备用模板")
+                    logger.error("❌ 所有重试都失败，使用备用模板")
                     is_fallback = True
                     fallback_html = self._generate_fallback_html(stock_code, stock_name, simplified_data)
                     return fallback_html, last_response, is_fallback
@@ -661,7 +652,26 @@ class ReportSimplifier:
         is_fallback = True
         fallback_html = self._generate_fallback_html(stock_code, stock_name, simplified_data)
         return fallback_html, last_response, is_fallback
-    
+
+    def _load_simplified_html_prompt(self) -> str:
+        """加载简化版HTML生成提示词 - 更短的版本，降低LLM生成难度"""
+        return """根据以下股票分析数据，生成一个简洁的HTML报告页面。
+
+    股票代码：{stock_code}
+    股票名称：{stock_name}
+    分析数据：
+    {simplified_data}
+
+    要求：
+    1. 标题：牛逼股票 · {stock_name}({stock_code})
+    2. 英雄区：深蓝色渐变背景，显示标题和executive_summary
+    3. 按顺序展示：公司介绍+题材、深度洞察、核心回顾(4个方面)、TET指标(4个)、风险警示、炒作点、短期展望、多空分歧、待办事项、金句
+    4. 所有数据从分析数据中提取，直接填充，不要使用{{变量}}模板
+    5. 适配手机端
+    6. 只返回完整HTML代码
+
+    直接输出HTML："""
+
     async def _save_raw_response_to_file(self, stock_code: str, response_type: str, content: str) -> str:
         """保存原始LLM响应到文件（用于调试）"""
         try:

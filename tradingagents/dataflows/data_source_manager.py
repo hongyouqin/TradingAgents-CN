@@ -11,7 +11,7 @@ import time
 from typing import Dict, List, Optional, Any
 from enum import Enum
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 import pandas as pd
 import numpy as np
 
@@ -472,9 +472,20 @@ class DataSourceManager:
                 return df
 
             # 3. 统一日期格式为 YYYY-MM-DD
+            # 🔧 修复: 使用 pd.to_datetime 统一处理所有日期格式（datetime/date/int/str）
+            #    避免 str(datetime) → "2026-06-24 00:00:00" 导致格式不匹配
             realtime_date_str = str(realtime_date)
             if len(realtime_date_str) == 8 and realtime_date_str.isdigit():
                 realtime_date_str = f"{realtime_date_str[:4]}-{realtime_date_str[4:6]}-{realtime_date_str[6:]}"
+            elif isinstance(realtime_date, (datetime, date)):
+                realtime_date_str = realtime_date.strftime('%Y-%m-%d')
+            else:
+                # 尝试用 pd.to_datetime 兜底（处理 Timestamp 等类型）
+                try:
+                    realtime_date_str = pd.to_datetime(realtime_date).strftime('%Y-%m-%d')
+                except Exception:
+                    pass  # 保持原值
+            logger.info(f"📅 [实时合并] {symbol} market_quotes trade_date 归一化后: {realtime_date_str}")
 
             # 🔧 修复1: 处理历史数据的日期（可能在索引中）
             df_copy = df.copy()
