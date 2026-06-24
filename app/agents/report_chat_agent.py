@@ -26,9 +26,9 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 
 from app.core.response import ok, fail
-from web.utils.mongodb_report_manager import mongodb_report_manager
 from app.services.llm_client import call_llm, embed_texts
 from app.services.session_store import get_session_store
+from utils.mongodb_report_manager import mongodb_report_manager
 
 logger = logging.getLogger(__name__)
 
