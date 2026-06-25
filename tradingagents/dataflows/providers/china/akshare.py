@@ -627,6 +627,11 @@ class AKShareProvider(BaseStockDataProvider):
                         matched_code = raw_code
 
                     if matched_code:
+                        # 🔥 获取当前日期（UTC+8）作为交易日期
+                        cn_tz = timezone(timedelta(hours=8))
+                        now_cn = datetime.now(cn_tz)
+                        trade_date = now_cn.strftime("%Y-%m-%d")  # 格式：2026-06-25
+
                         quotes_data = {
                             "name": str(row.get("名称", f"股票{matched_code}")),
                             "price": self._safe_float(row.get("最新价", 0)),
@@ -661,6 +666,9 @@ class AKShareProvider(BaseStockDataProvider):
                             "high_price": float(quotes_data.get("high", 0)),
                             "low_price": float(quotes_data.get("low", 0)),
                             "pre_close": float(quotes_data.get("pre_close", 0)),
+                            # 🔥 新增：交易日期（与 get_stock_quotes 一致）
+                            "trade_date": trade_date,
+                            "updated_at": now_cn.isoformat(),
                             # 🔥 新增：财务指标字段
                             "turnover_rate": quotes_data.get("turnover_rate"),  # 换手率（%）
                             "volume_ratio": quotes_data.get("volume_ratio"),  # 量比
