@@ -515,6 +515,54 @@ class PowerAccountService:
         self.transactions_collection.update_one({"_id":tx['_id']},{"$set":{"status":"CONFIRMED","transaction_type":"CONSUME","completed_at":datetime.utcnow()}})
         return True, "确认成功"
 
+    def _partial_confirm_consume_sync(self, order_no: str, consume_amount: Decimal) -> Tuple[bool, str]:
+        """部分确认消费：从冻结中扣除实际消耗部分，剩余自动解冻（一步原子操作）"""
+        tx = self.transactions_collection.find_one({"order_no":order_no,"status":"FROZEN","transaction_type":"FREEZE"})
+        if not tx: return False, "无冻结记录"
+        frozen_total = self._decimal_from_128(tx['amount'])
+        if consume_amount <= 0: return False, "消费金额必须大于0"
+        if consume_amount > frozen_total: return False, f"消费金额({consume_amount})超过冻结金额({frozen_total})"
+
+        consume_128 = self._decimal_to_128(consume_amount)
+        frozen_neg_128 = self._decimal_to_128(-frozen_total)
+
+        # 一步原子：校验 frozen >= frozen_total AND balance >= consume_amount
+        res = self.accounts_collection.find_one_and_update(
+            {
+                "_id": ObjectId(tx['account_id']),
+                "frozen_amount": {"$gte": tx['amount']},
+                "balance": {"$gte": consume_128},
+            },
+            {
+                "$inc": {
+                    "balance": self._decimal_to_128(-consume_amount),
+                    "frozen_amount": frozen_neg_128,
+                    "total_consumed": consume_128,
+                    "version": 1
+                }
+            },
+            return_document=True
+        )
+        if not res:
+            return False, "部分确认失败（余额不足或乐观锁冲突）"
+
+        # 更新流水：记录实际消费和剩余解冻
+        unfrozen = frozen_total - consume_amount
+        self.transactions_collection.update_one(
+            {"_id": tx['_id']},
+            {
+                "$set": {
+                    "status": "CONFIRMED",
+                    "transaction_type": "CONSUME",
+                    "consume_amount": consume_128,
+                    "unfrozen_amount": self._decimal_to_128(unfrozen),
+                    "completed_at": datetime.utcnow()
+                }
+            }
+        )
+        logger.info(f"✅ 部分确认消费: {order_no} 消耗={consume_amount} 解冻={unfrozen}")
+        return True, "确认成功"
+
     def _cancel_consume_sync(self, order_no: str, reason='') -> Tuple[bool, str]:
         tx = self.transactions_collection.find_one({"order_no":order_no,"status":"FROZEN"})
         if not tx: return False, "无记录"
@@ -540,6 +588,9 @@ class PowerAccountService:
 
     async def cancel_consume(self, order_no: str, reason=''):
         return await asyncio.to_thread(self._cancel_consume_sync, order_no, reason)
+
+    async def partial_confirm_consume(self, order_no: str, consume_amount: Decimal):
+        return await asyncio.to_thread(self._partial_confirm_consume_sync, order_no, consume_amount)
 
     # ------------------------------ 过期补偿 ------------------------------
     def _get_expired_frozen_sync(self, minutes=30):

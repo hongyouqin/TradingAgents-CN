@@ -307,7 +307,7 @@ def build_prompt(
     # 对话历史
     if history:
         parts.append("对话历史：")
-        for turn in history[-8:]:  # 保留最近 8 轮
+        for turn in history[-16:]:  # 保留最近 8 轮
             role = turn.get("role", "user")
             text = turn.get("text", "")
             parts.append(f"{role}: {text}")

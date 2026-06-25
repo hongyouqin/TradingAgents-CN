@@ -373,7 +373,7 @@ class ReportSimplifier:
     ) -> tuple[Dict[str, Any], str]:
         """调用LLM生成简化内容（带重试机制）"""
         max_retries = 3
-        retry_delay = 1
+        retry_delay = 2
         last_response = ""
         
         for attempt in range(max_retries):
