@@ -410,6 +410,12 @@ class ReportChatAgent:
         await self.session_store.append_message(conversation_id, {"role": "assistant", "text": reply})
         await self.session_store.increment_tokens(conversation_id, tracker.total)
 
+        # 7. 保存最新用户消息到会话顶层字段
+        session = await self.session_store.get_session(conversation_id)
+        if session:
+            session["last_user_message"] = message
+            await self.session_store.set_session(conversation_id, session)
+
         return {
             "reply": reply,
             "contexts": contexts[:3],  # 返回最相关的 3 个

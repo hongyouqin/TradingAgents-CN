@@ -281,6 +281,7 @@ class MongoDBReportManager:
                     "analysis_id": doc["analysis_id"],
                     "timestamp": doc["timestamp"].timestamp(),
                     "stock_symbol": doc["stock_symbol"],
+                    "stock_name": doc.get("stock_name", doc["stock_symbol"]),
                     "analysts": doc.get("analysts", []),
                     "research_depth": doc.get("research_depth", 0),
                     "status": doc.get("status", "completed"),

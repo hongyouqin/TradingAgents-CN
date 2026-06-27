@@ -17,6 +17,7 @@ Endpoints:
 返回格式统一为 {success, data, message, timestamp}
 """
 
+import asyncio
 import logging
 import uuid
 from decimal import Decimal
@@ -30,6 +31,7 @@ from app.agents.report_chat_agent import get_report_chat_agent
 from app.models.user import User
 from app.routers.auth_db import get_current_user
 from app.services.power_account_service import power_account_service
+from app.utils.mongodb_report_manager import mongodb_report_manager
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,6 @@ TOKEN_COST_RATE = Decimal("0.0002")    # 每 token 单价（⚡）
 
 class StartRequest(BaseModel):
     analysis_id: str
-    # user_id 去掉，从认证信息获取
 
 
 class MessageRequest(BaseModel):
@@ -92,6 +93,20 @@ async def start_conversation(
     # 2. 创建会话
     agent = get_report_chat_agent()
     conv_id = await agent.start_conversation(req.analysis_id, str(user["id"]))
+
+    # 3. 从报告获取股票名称/代码并保存到会话
+    try:
+        report_data = await asyncio.to_thread(
+            mongodb_report_manager.get_report_by_id, req.analysis_id
+        )
+        if report_data:
+            session = await agent.session_store.get_session(conv_id)
+            if session:
+                session["stock_name"] = report_data.get("stock_name", "")
+                session["stock_symbol"] = report_data.get("stock_symbol", "")
+                await agent.session_store.set_session(conv_id, session)
+    except Exception as e:
+        logger.warning(f"保存股票信息到会话失败: {e}")
 
     logger.info(
         f"✅ 报告对话已创建 | conversation_id={conv_id} user={user['id']}"
@@ -227,8 +242,12 @@ async def get_state(
     return ok({
         "conversation_id": conversation_id,
         "analysis_id": session.get("analysis_id"),
+        "stock_name": session.get("stock_name", ""),
+        "stock_symbol": session.get("stock_symbol", ""),
+        "last_user_message": session.get("last_user_message", ""),
         "tokens_used": session.get("tokens_used", 0),
         "rounds": len(history),
+        "created_at": session.get("created_at", ""),
         "recent_messages": [
             {"role": m.get("role"), "text_preview": m.get("text", "")[:200]}
             for m in history[-4:]
@@ -239,9 +258,10 @@ async def get_state(
 @router.get("/conversations")
 async def list_conversations(
     user: dict = Depends(get_current_user),
-    limit: int = Query(20, ge=1, le=100),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
 ) -> Any:
-    """列出当前用户的报告对话会话（最近 N 条）。"""
+    """列出当前用户的报告对话会话（分页，按创建时间倒序）。"""
     try:
         from app.core.redis_client import get_redis_service
 
@@ -257,16 +277,29 @@ async def list_conversations(
                 conversations.append({
                     "conversation_id": conv_id,
                     "analysis_id": data.get("analysis_id"),
+                    "stock_name": data.get("stock_name", ""),
+                    "stock_symbol": data.get("stock_symbol", ""),
+                    "last_user_message": data.get("last_user_message", ""),
                     "rounds": len(data.get("history", [])),
                     "tokens_used": data.get("tokens_used", 0),
                     "created_at": data.get("created_at", ""),
                 })
 
-        conversations.sort(key=lambda c: c["rounds"], reverse=True)
-        return ok({"conversations": conversations[:limit], "total": len(conversations)})
+        # 按创建时间倒序排（最近的在前）
+        conversations.sort(key=lambda c: c.get("created_at", ""), reverse=True)
+        total = len(conversations)
+        start = (page - 1) * page_size
+        paged = conversations[start : start + page_size]
+        return ok({
+            "conversations": paged,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+        })
     except Exception as e:
         logger.warning(f"列出会话失败: {e}")
-        return ok({"conversations": [], "total": 0})
+        return ok({"conversations": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0})
 
 
 @router.delete("/conversation/{conversation_id}")
