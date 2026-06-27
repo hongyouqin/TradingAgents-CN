@@ -227,8 +227,10 @@ async def send_message(
 async def get_state(
     conversation_id: str,
     user: dict = Depends(get_current_user),
+    page: int = Query(1, ge=1, description="消息页码"),
+    page_size: int = Query(20, ge=1, le=200, description="每页消息数"),
 ) -> Any:
-    """获取会话状态，包含历史轮次、token 统计等。"""
+    """获取会话状态，支持分页查看完整消息内容。"""
     agent = get_report_chat_agent()
     session = await agent.get_conversation_state(conversation_id)
     if not session:
@@ -239,6 +241,13 @@ async def get_state(
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
     history = session.get("history", [])
+    total_messages = len(history)
+
+    # 按创建时间倒序分页（最新的在前）
+    history_reversed = list(reversed(history))
+    start = (page - 1) * page_size
+    paged_messages = history_reversed[start : start + page_size]
+
     return ok({
         "conversation_id": conversation_id,
         "analysis_id": session.get("analysis_id"),
@@ -249,9 +258,18 @@ async def get_state(
         "rounds": len(history),
         "created_at": session.get("created_at", ""),
         "recent_messages": [
-            {"role": m.get("role"), "text_preview": m.get("text", "")[:200]}
-            for m in history[-4:]
+            {
+                "role": m.get("role"),
+                "text": m.get("text", ""),
+            }
+            for m in paged_messages
         ],
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total_messages,
+            "total_pages": (total_messages + page_size - 1) // page_size if total_messages > 0 else 0,
+        },
     })
 
 
