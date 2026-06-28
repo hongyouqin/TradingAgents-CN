@@ -95,14 +95,26 @@ async def get_admin_dashboard(admin=Depends(get_admin_user)):
 
 
 @router.get("/monthly-recharge", response_model=Dict[str, Any])
-async def get_monthly_recharge(admin=Depends(get_admin_user)):
-    """获取本月充值总额"""
-    total = user_stat_service.get_monthly_recharge()
+async def get_monthly_recharge(
+    month: str = Query(None, description="查询月份，格式 YYYY-MM，不传则查本月"),
+    admin=Depends(get_admin_user),
+):
+    """获取指定月份充值总额"""
+    if month:
+        try:
+            date_obj = datetime.strptime(month, "%Y-%m")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="月份格式错误，请使用 YYYY-MM")
+    else:
+        date_obj = datetime.utcnow()
+        month = date_obj.strftime("%Y-%m")
+
+    total = user_stat_service.get_monthly_recharge(date=date_obj)
     return {
         "success": True,
         "data": {
             "monthly_recharge": total,
-            "month": datetime.utcnow().strftime("%Y-%m"),
+            "month": month,
         }
     }
     
