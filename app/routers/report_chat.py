@@ -243,7 +243,7 @@ async def get_state(
     history = session.get("history", [])
     total_messages = len(history)
 
-    history_reversed = list(history)
+    history_reversed = history  # 按时间正序排列（最早的在前面）
     start = (page - 1) * page_size
     paged_messages = history_reversed[start : start + page_size]
 
@@ -256,10 +256,12 @@ async def get_state(
         "tokens_used": session.get("tokens_used", 0),
         "rounds": len(history),
         "created_at": session.get("created_at", ""),
-        "recent_messages": [
+        "messages": [
             {
                 "role": m.get("role"),
                 "text": m.get("text", ""),
+                "tokens": m.get("tokens"),
+                "cost": m.get("cost"),
             }
             for m in paged_messages
         ],

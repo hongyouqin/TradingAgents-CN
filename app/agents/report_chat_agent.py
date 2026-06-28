@@ -23,6 +23,7 @@ import asyncio
 import logging
 import os
 import time
+from decimal import Decimal
 from typing import List, Dict, Any, Optional, Tuple
 
 from app.core.response import ok, fail
@@ -31,6 +32,15 @@ from app.services.session_store import get_session_store
 from app.utils.mongodb_report_manager import mongodb_report_manager
 
 logger = logging.getLogger(__name__)
+
+# ── 算力常量 ──
+TOKEN_COST_RATE = Decimal("0.0002")    # 每 token 单价（⚡）
+
+
+def calc_token_cost(total_tokens: int) -> float:
+    """根据 token 数计算实际费用，最低 0.01⚡"""
+    cost = Decimal(str(total_tokens)) * TOKEN_COST_RATE * 2
+    return float(max(cost, Decimal("0.01")))
 
 
 def _is_float_str(s: str) -> bool:
@@ -307,7 +317,7 @@ def build_prompt(
     # 对话历史
     if history:
         parts.append("对话历史：")
-        for turn in history[-16:]:  # 保留最近 8 轮
+        for turn in history[-16:]:  # 保留最近 16 轮
             role = turn.get("role", "user")
             text = turn.get("text", "")
             parts.append(f"{role}: {text}")
@@ -405,9 +415,16 @@ class ReportChatAgent:
             tracker.add_input(max(1, len(prompt) // 4))
             tracker.add_output(max(1, len(reply) // 4))
 
-        # 6. 持久化对话
+        # 6. 持久化对话（保存 tokens 和实际费用到 assistant 消息）
+        token_snapshot = tracker.snapshot()
+        actual_cost = calc_token_cost(token_snapshot["total"])
         await self.session_store.append_message(conversation_id, {"role": "user", "text": message})
-        await self.session_store.append_message(conversation_id, {"role": "assistant", "text": reply})
+        await self.session_store.append_message(conversation_id, {
+            "role": "assistant",
+            "text": reply,
+            "tokens": token_snapshot,
+            "cost": actual_cost,
+        })
         await self.session_store.increment_tokens(conversation_id, tracker.total)
 
         # 7. 保存最新用户消息到会话顶层字段
@@ -419,7 +436,8 @@ class ReportChatAgent:
         return {
             "reply": reply,
             "contexts": contexts[:3],  # 返回最相关的 3 个
-            "tokens": tracker.snapshot(),
+            "tokens": token_snapshot,
+            "cost": actual_cost,
             "tool_calls": tool_results if tool_results else None,
         }
 
