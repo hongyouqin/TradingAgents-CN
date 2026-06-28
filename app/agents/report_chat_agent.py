@@ -417,7 +417,8 @@ class ReportChatAgent:
 
         # 6. 持久化对话（保存 tokens 和实际费用到 assistant 消息）
         token_snapshot = tracker.snapshot()
-        actual_cost = calc_token_cost(token_snapshot["total"])
+        actual_cost_decimal = calc_token_cost(token_snapshot["total"])
+        actual_cost = float(actual_cost_decimal)
         await self.session_store.append_message(conversation_id, {"role": "user", "text": message})
         await self.session_store.append_message(conversation_id, {
             "role": "assistant",
