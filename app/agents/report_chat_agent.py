@@ -37,10 +37,10 @@ logger = logging.getLogger(__name__)
 TOKEN_COST_RATE = Decimal("0.0002")    # 每 token 单价（⚡）
 
 
-def calc_token_cost(total_tokens: int) -> float:
-    """根据 token 数计算实际费用，最低 0.01⚡"""
-    cost = Decimal(str(total_tokens)) * TOKEN_COST_RATE * 2
-    return float(max(cost, Decimal("0.01")))
+def calc_token_cost(total_tokens: int) -> Decimal:
+    """根据 token 数计算实际费用，最低 0.01⚡，返回 Decimal 用于算力结算"""
+    cost = Decimal(str(total_tokens)) * TOKEN_COST_RATE * 5
+    return max(cost, Decimal("0.01"))
 
 
 def _is_float_str(s: str) -> bool:

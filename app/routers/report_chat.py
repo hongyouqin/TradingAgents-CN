@@ -27,7 +27,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.response import ok, fail
-from app.agents.report_chat_agent import get_report_chat_agent
+from app.agents.report_chat_agent import (
+    get_report_chat_agent,
+    calc_token_cost,
+    TOKEN_COST_RATE,
+)
 from app.models.user import User
 from app.routers.auth_db import get_current_user
 from app.services.power_account_service import power_account_service
@@ -39,7 +43,6 @@ router = APIRouter(tags=["report-chat"])
 
 # ── 算力常量 ──────────────────────────────────────────────
 MIN_START_BALANCE = Decimal("5")       # 启动会话最低可用余额 & 单次消息冻结金额
-TOKEN_COST_RATE = Decimal("0.0002")    # 每 token 单价（⚡）
 
 
 # ── Pydantic 请求模型 ──
@@ -62,12 +65,6 @@ def _make_user_obj(user: dict) -> User:
     d = user.copy()
     d["hashed_password"] = "dummy"
     return User.model_validate(d)
-
-
-def _calc_cost(total_tokens: int) -> Decimal:
-    """根据 token 数计算实际费用，最低 0.01⚡"""
-    cost = Decimal(str(total_tokens)) * TOKEN_COST_RATE * 2
-    return max(cost, Decimal("0.01"))
 
 
 # ── 端点 ──
@@ -99,6 +96,7 @@ async def start_conversation(
         report_data = await asyncio.to_thread(
             mongodb_report_manager.get_report_by_id, req.analysis_id
         )
+        logger.info(f"获取报告数据：{report_data}")
         if report_data:
             session = await agent.session_store.get_session(conv_id)
             if session:
@@ -163,7 +161,7 @@ async def send_message(
     # 4. 计算实际费用
     tokens = res.get("tokens", {})
     total_tokens = tokens.get("total", 0)
-    actual_cost = _calc_cost(total_tokens)
+    actual_cost = calc_token_cost(total_tokens)
 
     # 5. 结算：部分确认消费 — 只扣实际消耗，剩余自动解冻
     if actual_cost <= freeze_amount:
