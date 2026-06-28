@@ -304,12 +304,15 @@ def build_prompt(
     stock_symbol: str = "",
 ) -> str:
     """构建完整 prompt。"""
+    from datetime import datetime as _dt
+    today_str = _dt.utcnow().strftime("%Y-%m-%d")
     parts = [SYSTEM_PROMPT_ZH, ""]
 
-    # 当前对话股票信息
+    # 当前日期 & 对话股票信息
+    parts.append(f"当前日期: {today_str}")
     if stock_name and stock_symbol:
         parts.append(f"当前对话股票: {stock_name}({stock_symbol})")
-        parts.append("")
+    parts.append("")
 
     # 工具描述
     if tool_descriptions:
@@ -334,6 +337,7 @@ def build_prompt(
 
     # 当前问题
     parts.append(f"用户: {message}")
+    parts.append("")
     parts.append("助手:")
     return "\n".join(parts)
 
@@ -407,14 +411,19 @@ class ReportChatAgent:
         reply = ""
         token_count = 0
 
-        # ── 第1轮：让AI决定是否需要调用工具 ──
+        # ── 第1轮：让AI回答 ──
         prompt = build_prompt(message, contexts, history, tool_descriptions, stock_name=stock_name, stock_symbol=stock_symbol)
         reply, token_count = await call_llm(prompt)
         tracker.add_input(max(1, len(prompt) // 4))
         tracker.add_output(max(1, len(reply) // 4))
 
-        # ── 解析AI回答中是否有工具调用 ──
+        # ── 尝试触发工具调用 ──
+        # ① 先看AI回答中是否嵌入了 @tool()
         tool_call, tool_params = self._parse_tool_call(reply)
+        # ② 如果没有，根据用户消息意图自动匹配工具
+        if not tool_call and stock_symbol:
+            tool_call, tool_params = self._detect_tool_intent(message, stock_symbol)
+
         tool_results = []
 
         if tool_call:
@@ -518,6 +527,28 @@ class ReportChatAgent:
                         params[k] = v
         if tool_name in self.tools._tools:
             return tool_name, params
+        return None, {}
+
+    def _detect_tool_intent(self, message: str, stock_symbol: str) -> Tuple[Optional[str], Dict[str, Any]]:
+        """检测用户消息是否需要自动调用工具（基于关键词）"""
+        msg = message.lower()
+
+        # 历史行情/股票数据查询
+        if any(kw in msg for kw in ["行情", "股价", "收盘价", "开盘价", "涨跌", "k线", "日线", "数据", "交易", "走势", "价格"]):
+            return "fetch_historical", {"symbol": stock_symbol, "limit": 30}
+
+        # 新闻查询
+        if any(kw in msg for kw in ["新闻", "资讯", "公告", "消息", "热点"]):
+            return "fetch_news", {"symbol": stock_symbol, "limit": 5}
+
+        # EMA穿透分析
+        if any(kw in msg for kw in ["穿透", "ema", "买入价", "建仓价"]):
+            return "calc_ema_penetration", {"symbol": stock_symbol}
+
+        # 仓位计算
+        if any(kw in msg for kw in ["仓位", "资金管理", "买入多少", "买多少", "止损价"]):
+            return "calc_trade_size", {}
+
         return None, {}
 
 
