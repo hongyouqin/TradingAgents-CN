@@ -300,9 +300,16 @@ def build_prompt(
     contexts: List[str],
     history: List[Dict[str, Any]],
     tool_descriptions: str,
+    stock_name: str = "",
+    stock_symbol: str = "",
 ) -> str:
     """构建完整 prompt。"""
     parts = [SYSTEM_PROMPT_ZH, ""]
+
+    # 当前对话股票信息
+    if stock_name and stock_symbol:
+        parts.append(f"当前对话股票: {stock_name}({stock_symbol})")
+        parts.append("")
 
     # 工具描述
     if tool_descriptions:
@@ -382,6 +389,8 @@ class ReportChatAgent:
         analysis_id = session.get("analysis_id")
         if not analysis_id:
             return {"error": "analysis_id_missing"}
+        stock_name = session.get("stock_name", "")
+        stock_symbol = session.get("stock_symbol", "")
 
         # 2. 确保向量库存在
         await self.vector_builder.ensure_index(analysis_id)
@@ -392,29 +401,30 @@ class ReportChatAgent:
         # 4. 获取历史
         history = session.get("history", [])
 
-        # 5. 检查是否有工具调用意图
+        # 5. 准备工具描述和 prompt
         tool_descriptions = self.tools.get_descriptions()
-        tool_call, tool_params = self._parse_tool_call(message)
-
-        tracker = TokenTracker() 
+        tracker = TokenTracker()
         reply = ""
+        token_count = 0
+
+        # ── 第1轮：让AI决定是否需要调用工具 ──
+        prompt = build_prompt(message, contexts, history, tool_descriptions, stock_name=stock_name, stock_symbol=stock_symbol)
+        reply, token_count = await call_llm(prompt)
+        tracker.add_input(max(1, len(prompt) // 4))
+        tracker.add_output(max(1, len(reply) // 4))
+
+        # ── 解析AI回答中是否有工具调用 ──
+        tool_call, tool_params = self._parse_tool_call(reply)
         tool_results = []
 
         if tool_call:
-            # ── 工具调用模式 ──
+            # ── 第2轮：执行工具，基于真实数据重新回答 ──
             result_str = await self.tools.execute(tool_call, **tool_params)
             tool_results.append({"tool": tool_call, "params": tool_params, "result": result_str})
-            # 将工具结果作为上下文重新生成回复
             tool_context = f"[工具 {tool_call} 返回 — 以下数据为实际查询结果，禁止编造补充]: {result_str}"
-            prompt = build_prompt(message, contexts + [tool_context], history, tool_descriptions)
-            reply, token_count = await call_llm(prompt)
-            tracker.add_input(max(1, len(prompt) // 4))
-            tracker.add_output(max(1, len(reply) // 4))
-        else:
-            # ── 标准 RAG 问答模式 ──
-            prompt = build_prompt(message, contexts, history, tool_descriptions)
-            reply, token_count = await call_llm(prompt)
-            tracker.add_input(max(1, len(prompt) // 4))
+            prompt2 = build_prompt(message, contexts + [tool_context], history, tool_descriptions, stock_name=stock_name, stock_symbol=stock_symbol)
+            reply, token_count2 = await call_llm(prompt2)
+            tracker.add_input(max(1, len(prompt2) // 4))
             tracker.add_output(max(1, len(reply) // 4))
 
         # 6. 持久化对话（保存 tokens 和实际费用到 assistant 消息）
