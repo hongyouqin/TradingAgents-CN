@@ -14,6 +14,7 @@ EMA穿透买入策略分析工具
 """
 
 import logging
+from datetime import datetime, timedelta
 from typing import Dict, Any
 
 import numpy as np
@@ -34,6 +35,8 @@ class EmaPenetrationTool:
         fast_ema: int = 13,
         slow_ema: int = 26,
         lookback_period: int = 30,
+        start_date: str = None,
+        end_date: str = None,
     ) -> Dict[str, Any]:
         """
         分析EMA穿透买入策略。
@@ -43,25 +46,25 @@ class EmaPenetrationTool:
             fast_ema: 快速EMA周期（默认13日）
             slow_ema: 慢速EMA周期（默认26日）
             lookback_period: 计算平均穿透值的回溯周期（默认30天）
+            start_date: 开始日期 YYYY-MM-DD（可选，默认向前推1年）
+            end_date: 结束日期 YYYY-MM-DD（可选，默认当天）
 
         Returns:
-            dict: {
-                success: bool,
-                data: {
-                    symbol, stock_name, latest_date, latest_close,
-                    current_fast_ema, current_slow_ema,
-                    penetration_count, avg_penetration,
-                    estimated_tomorrow_ema, suggested_buy_price,
-                    trend_status
-                },
-                message: str
-            }
+            dict: {success, data, message}
         """
         try:
-            # 1. 获取历史日线数据（最近180天）
+            # 1. 获取历史日线数据（默认最近180个交易日）
+            if not end_date:
+                end_date = datetime.utcnow().strftime("%Y-%m-%d")
+            if not start_date:
+                from datetime import timedelta
+                start_date = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
+
             service = await get_historical_data_service()
             records = await service.get_historical_data(
                 symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
                 period="daily",
                 limit=180,
             )

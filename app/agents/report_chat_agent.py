@@ -255,8 +255,8 @@ def build_default_tools() -> ToolRegistry:
     )
     registry.register(
         "fetch_historical",
-        "获取指定股票的历史行情数据。参数: symbol(股票代码), period(周期,daily/weekly/monthly,默认daily), limit(条数,默认30)",
-        lambda symbol, period="daily", limit=256: hist.fetch_historical(symbol, period=period, limit=limit),
+        "获取指定股票的历史行情数据。参数: symbol(股票代码), start_date(开始日期YYYY-MM-DD,可选), end_date(结束日期YYYY-MM-DD,可选), period(周期,daily/weekly/monthly,默认daily), limit(条数,默认30)",
+        lambda symbol, start_date=None, end_date=None, period="daily", limit=256: hist.fetch_historical(symbol, start_date=start_date, end_date=end_date, period=period, limit=limit),
     )
     registry.register(
         "calc_trade_size",
@@ -266,8 +266,8 @@ def build_default_tools() -> ToolRegistry:
     )
     registry.register(
         "calc_ema_penetration",
-        "EMA穿透买入策略分析工具，基于均线穿透方法计算建议买入价。参数: symbol(6位股票代码), fast_ema(快EMA周期,默认13), slow_ema(慢EMA周期,默认26), lookback_period(穿透回溯天数,默认30)",
-        lambda symbol, fast_ema=13, slow_ema=26, lookback_period=30: ema_pen.analyze(symbol, fast_ema=fast_ema, slow_ema=slow_ema, lookback_period=lookback_period),
+        "EMA穿透买入策略分析工具，基于均线穿透方法计算建议买入价。参数: symbol(6位股票代码), fast_ema(快EMA周期,默认13), slow_ema(慢EMA周期,默认26), lookback_period(穿透回溯天数,默认30), start_date(开始日期YYYY-MM-DD,可选), end_date(结束日期YYYY-MM-DD,可选)",
+        lambda symbol, fast_ema=13, slow_ema=26, lookback_period=30, start_date=None, end_date=None: ema_pen.analyze(symbol, fast_ema=fast_ema, slow_ema=slow_ema, lookback_period=lookback_period, start_date=start_date, end_date=end_date),
     )
     # ── 可在此处扩展更多工具 ──
 
