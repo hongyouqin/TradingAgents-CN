@@ -243,8 +243,7 @@ async def get_state(
     history = session.get("history", [])
     total_messages = len(history)
 
-    # 按创建时间倒序分页（最新的在前）
-    history_reversed = list(reversed(history))
+    history_reversed = list(history)
     start = (page - 1) * page_size
     paged_messages = history_reversed[start : start + page_size]
 

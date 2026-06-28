@@ -120,6 +120,15 @@ class UserStatService:
         res = list(self.orders.aggregate(pipeline))
         return round(res[0]["total"], 2) if res else 0.0
 
+    def get_total_recharge(self) -> float:
+        """历史充值总额（所有已支付订单）"""
+        pipeline = [
+            {"$match": {"status": "PAID"}},
+            {"$group": {"_id": None, "total": {"$sum": "$price"}}}
+        ]
+        res = list(self.orders.aggregate(pipeline))
+        return round(res[0]["total"], 2) if res else 0.0
+
     # --------------------------------------------------------------------------
     # 3. 报告/分析生成次数（来自你的 power_transactions）
     # 完全贴合：submit_single_analysis 接口的算力消费

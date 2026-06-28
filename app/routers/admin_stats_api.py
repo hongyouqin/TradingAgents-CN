@@ -74,6 +74,7 @@ async def get_history_stats(
 async def get_admin_dashboard(admin=Depends(get_admin_user)):
     """管理员后台大盘数据"""
     today = user_stat_service.generate_daily_stats()
+    total_recharge = user_stat_service.get_total_recharge()
 
     return {
         "success": True,
@@ -86,8 +87,22 @@ async def get_admin_dashboard(admin=Depends(get_admin_user)):
                 "今日充值": today["daily_recharge"],
                 "今日报告生成": today["daily_reports"],
                 "本月充值": today["monthly_recharge"],
-                "本月报告生成": today["monthly_reports"]
+                "本月报告生成": today["monthly_reports"],
+                "总充值": total_recharge
             }
+        }
+    }
+
+
+@router.get("/monthly-recharge", response_model=Dict[str, Any])
+async def get_monthly_recharge(admin=Depends(get_admin_user)):
+    """获取本月充值总额"""
+    total = user_stat_service.get_monthly_recharge()
+    return {
+        "success": True,
+        "data": {
+            "monthly_recharge": total,
+            "month": datetime.utcnow().strftime("%Y-%m"),
         }
     }
     
