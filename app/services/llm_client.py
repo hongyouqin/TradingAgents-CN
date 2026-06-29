@@ -25,25 +25,32 @@ _embedding_model = None
 
 async def embed_texts(texts: List[str]) -> List[List[float]]:
     """生成文本嵌入向量。
-    使用 langchain_openai OpenAIEmbeddings 连接兼容的 embedding 服务。
-    首次调用时自动初始化（使用系统默认 embedding 模型）。
+    自动分批（每批最多 10 条）以适应 API 限制。
     """
     global _embedding_model
     if _embedding_model is None:
         _embedding_model = _create_embedder()
-    try:
-        return _embedding_model.embed_documents(texts)
-    except Exception as e:
-        logger.warning(f"embed_texts 失败: {e}，降级为确定性向量")
-        import math
-        dim = 128
-        results = []
-        for text in texts:
-            h = hash(text) % 10000
-            vec = [float((h + i * 7) % 100) / 100.0 for i in range(dim)]
-            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-            results.append([v / norm for v in vec])
-        return results
+    if not texts:
+        return []
+
+    # DashScope 限制单次最多 10 条，自动分批
+    batch_size = 10
+    all_vectors = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        try:
+            vectors = _embedding_model.embed_documents(batch)
+            all_vectors.extend(vectors)
+        except Exception as e:
+            logger.warning(f"embed_texts 分批失败 ({i}~{i+len(batch)}): {e}，降级为确定性向量")
+            import math
+            dim = 128
+            for text in batch:
+                h = hash(text) % 10000
+                vec = [float((h + i * 7) % 100) / 100.0 for _ in range(dim)]
+                norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+                all_vectors.append([v / norm for v in vec])
+    return all_vectors
 
 
 def _create_embedder():
