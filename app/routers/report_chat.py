@@ -87,22 +87,31 @@ async def start_conversation(
             detail=f"算力不足，需要至少 {MIN_START_BALANCE}⚡ 才能开始对话（当前可用: {available:.2f}⚡）",
         )
 
-    # 2. 创建会话
-    agent = get_report_chat_agent()
-    conv_id = await agent.start_conversation(req.analysis_id, str(user["id"]))
-
-    # 3. 从报告获取股票名称/代码并保存到会话
+    # 2. 验证分析报告存在
     try:
         report_data = await asyncio.to_thread(
             mongodb_report_manager.get_report_by_id, req.analysis_id
         )
-        logger.info(f"获取报告数据：{report_data}")
-        if report_data:
-            session = await agent.session_store.get_session(conv_id)
-            if session:
-                session["stock_name"] = report_data.get("stock_name", "")
-                session["stock_symbol"] = report_data.get("stock_symbol", "")
-                await agent.session_store.set_session(conv_id, session)
+    except Exception as e:
+        logger.error(f"查询报告失败: {e}")
+        raise HTTPException(status_code=500, detail="查询分析报告时发生错误")
+    if not report_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"分析报告不存在: {req.analysis_id}",
+        )
+
+    # 3. 创建会话
+    agent = get_report_chat_agent()
+    conv_id = await agent.start_conversation(req.analysis_id, str(user["id"]))
+
+    # 4. 从报告获取股票名称/代码并保存到会话
+    try:
+        session = await agent.session_store.get_session(conv_id)
+        if session:
+            session["stock_name"] = report_data.get("stock_name", "")
+            session["stock_symbol"] = report_data.get("stock_symbol", "")
+            await agent.session_store.set_session(conv_id, session)
     except Exception as e:
         logger.warning(f"保存股票信息到会话失败: {e}")
 

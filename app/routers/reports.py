@@ -425,6 +425,71 @@ async def delete_report(
         logger.error(f"❌ 删除报告失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/by-task/{task_id}")
+async def get_report_by_task_id(
+    task_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """通过任务ID查询 analysis_reports 集合中的分析报告"""
+    try:
+        logger.info(f"🔍 按任务ID查询报告: {task_id}")
+
+        db = get_mongo_db()
+        doc = await db.analysis_reports.find_one({"task_id": task_id})
+
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"未找到 task_id={task_id} 对应的分析报告")
+
+        stock_symbol = doc.get("stock_symbol", "")
+        stock_name = doc.get("stock_name") or get_stock_name(stock_symbol)
+
+        created_at = doc.get("created_at", datetime.utcnow())
+        updated_at = doc.get("updated_at", datetime.utcnow())
+        created_at_tz = to_config_tz(created_at)
+        updated_at_tz = to_config_tz(updated_at)
+
+        def to_iso(x):
+            if hasattr(x, "isoformat"):
+                return x.isoformat()
+            return x or ""
+
+        report = {
+            "id": str(doc["_id"]),
+            "analysis_id": doc.get("analysis_id", ""),
+            "task_id": doc.get("task_id", ""),
+            "stock_symbol": stock_symbol,
+            "stock_name": stock_name,
+            "model_info": doc.get("model_info", "Unknown"),
+            "analysis_date": doc.get("analysis_date", ""),
+            "status": doc.get("status", "completed"),
+            "created_at": to_iso(created_at_tz),
+            "updated_at": to_iso(updated_at_tz),
+            "analysts": doc.get("analysts", []),
+            "research_depth": doc.get("research_depth", 1),
+            "summary": doc.get("summary", ""),
+            "reports": doc.get("reports", {}),
+            "recommendation": doc.get("recommendation", ""),
+            "confidence_score": doc.get("confidence_score", 0.0),
+            "risk_level": doc.get("risk_level", "中等"),
+            "key_points": doc.get("key_points", []),
+            "execution_time": doc.get("execution_time", 0),
+            "tokens_used": doc.get("tokens_used", 0),
+            "source": "analysis_reports",
+        }
+
+        return {
+            "success": True,
+            "data": report,
+            "message": "报告查询成功"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 按任务ID查询报告失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{report_id}/download")
 async def download_report(
     report_id: str,
