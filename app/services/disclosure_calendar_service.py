@@ -1,11 +1,11 @@
 """
-预约披露日数据同步与查询服务
+数据概览服务（预约披露日 + 股票热度）
 
 功能：
 1. 通过 AKShare 获取 A 股预约披露日历
-2. 计算最新预约披露日（三次变更 > 二次变更 > 一次变更 > 首次预约）
-3. 全量替换写入 MongoDB disclosure_calendar 集合
-4. 提供按股票代码查询和按披露日排序的分页查询
+2. 通过 AKShare 获取雪球股票热度（最热门 / 本周新增）
+3. 全量替换写入 MongoDB disclosure_calendar / stock_hot_xq 集合
+4. 提供查询接口和定时同步入口
 """
 import logging
 from datetime import datetime, timezone
@@ -338,8 +338,173 @@ class DisclosureCalendarService:
         }
 
 
-# 全局单例
+# ===================== 股票热度（雪球）服务 =====================
+
+STOCK_HOT_COLLECTION = "stock_hot_xq"
+STOCK_HOT_CATEGORIES = ["最热门", "本周新增"]
+
+
+class StockHotXueqiuService:
+    """雪球股票热度服务（最热门 / 本周新增）"""
+
+    def __init__(self):
+        self._db: Optional[AsyncIOMotorDatabase] = None
+
+    async def _get_db(self) -> AsyncIOMotorDatabase:
+        if self._db is None:
+            self._db = get_mongo_db()
+        return self._db
+
+    # ---- 数据获取 ----
+
+    async def fetch_hot_data(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        从 AKShare 获取雪球股票热度数据（两个分类）
+
+        Returns:
+            {"最热门": [...], "本周新增": [...]} 若失败返回空 dict
+        """
+        import asyncio
+        import akshare as ak
+
+        result: Dict[str, List[Dict[str, Any]]] = {}
+
+        for category in STOCK_HOT_CATEGORIES:
+            try:
+                def _fetch(cat=category):
+                    return ak.stock_hot_follow_xq(symbol=cat)
+
+                loop = asyncio.get_event_loop()
+                df = await loop.run_in_executor(None, _fetch)
+
+                if df is None or (hasattr(df, "empty") and df.empty):
+                    logger.warning(f"雪球热度[{category}] 返回空数据")
+                    continue
+
+                records = []
+                for rank, (_, row) in enumerate(df.iterrows(), start=1):
+                    records.append({
+                        "stock_code": str(row.iloc[0]) if len(row) > 0 else "",
+                        "stock_name": str(row.iloc[1]) if len(row) > 1 else "",
+                        "followers": int(row.iloc[2]) if len(row) > 2 and pd.notna(row.iloc[2]) else 0,
+                        "current_price": float(row.iloc[3]) if len(row) > 3 and pd.notna(row.iloc[3]) else None,
+                        "category": category,
+                        "rank": rank,
+                    })
+
+                result[category] = records
+                logger.info(f"雪球热度[{category}] 获取成功: {len(records)} 条")
+
+            except Exception as e:
+                logger.error(f"雪球热度[{category}] 获取失败: {e}", exc_info=True)
+
+        return result
+
+    # ---- 数据库同步 ----
+
+    async def _ensure_indexes(self):
+        """确保集合索引存在"""
+        db = await self._get_db()
+        col = db[STOCK_HOT_COLLECTION]
+
+        await col.create_index(
+            [("stock_code", 1), ("category", 1)],
+            unique=True,
+            name="hot_stock_code_category",
+        )
+        await col.create_index([("category", 1)], name="hot_category")
+        await col.create_index([("rank", 1)], name="hot_rank")
+        await col.create_index([("followers", -1)], name="hot_followers_desc")
+
+    async def sync_hot_data(self) -> int:
+        """
+        全量同步雪球股票热度数据
+
+        Returns:
+            总写入记录数
+        """
+        db = await self._get_db()
+        await self._ensure_indexes()
+
+        data = await self.fetch_hot_data()
+        if not data:
+            logger.warning("雪球热度数据为空，跳过同步")
+            return 0
+
+        col = db[STOCK_HOT_COLLECTION]
+        total_inserted = 0
+        now_utc = datetime.utcnow()
+
+        for category, records in data.items():
+            if not records:
+                continue
+
+            # 先删除该分类的旧数据
+            delete_result = await col.delete_many({"category": category})
+            logger.info(
+                f"删除旧热度数据: category={category}, deleted={delete_result.deleted_count}"
+            )
+
+            # 写入 updated_at
+            for rec in records:
+                rec["updated_at"] = now_utc
+
+            # 批量插入
+            if records:
+                insert_result = await col.insert_many(records, ordered=False)
+                total_inserted += len(insert_result.inserted_ids)
+                logger.info(f"热度[{category}] 写入完成: {len(insert_result.inserted_ids)} 条")
+
+        logger.info(f"雪球热度全量同步完成: 共 {total_inserted} 条")
+        return total_inserted
+
+    # ---- 查询接口 ----
+
+    async def query_by_category(
+        self, category: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        按分类查询热度排行
+
+        Args:
+            category: "最热门" 或 "本周新增"
+            limit: 返回条数
+
+        Returns:
+            热度排行列表
+        """
+        db = await self._get_db()
+        col = db[STOCK_HOT_COLLECTION]
+
+        cursor = (
+            col.find({"category": category}, {"_id": 0})
+            .sort("rank", 1)
+            .limit(limit)
+        )
+
+        items = []
+        async for doc in cursor:
+            items.append(doc)
+
+        return items
+
+    async def query_all(self, limit: int = 50) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        查询所有分类的热度数据
+
+        Returns:
+            {"最热门": [...], "本周新增": [...]}
+        """
+        result = {}
+        for category in STOCK_HOT_CATEGORIES:
+            result[category] = await self.query_by_category(category, limit)
+        return result
+
+
+# ===================== 全局单例 =====================
+
 _disclosure_calendar_service: Optional[DisclosureCalendarService] = None
+_stock_hot_service: Optional[StockHotXueqiuService] = None
 
 
 def get_disclosure_calendar_service() -> DisclosureCalendarService:
@@ -350,7 +515,15 @@ def get_disclosure_calendar_service() -> DisclosureCalendarService:
     return _disclosure_calendar_service
 
 
-# ---- 供调度器调用的同步函数 ----
+def get_stock_hot_xueqiu_service() -> StockHotXueqiuService:
+    """获取雪球热度服务单例"""
+    global _stock_hot_service
+    if _stock_hot_service is None:
+        _stock_hot_service = StockHotXueqiuService()
+    return _stock_hot_service
+
+
+# ---- 供调度器调用的同步函数（数据概览）----
 
 async def run_disclosure_calendar_sync(data_date: Optional[str] = None) -> int:
     """
@@ -365,8 +538,57 @@ async def run_disclosure_calendar_sync(data_date: Optional[str] = None) -> int:
     service = get_disclosure_calendar_service()
     try:
         count = await service.sync_disclosure_calendar(data_date=data_date)
-        logger.info(f"📅 预约披露日定时同步完成: {count} 条")
+        logger.info(f"预约披露日定时同步完成: {count} 条")
         return count
     except Exception as e:
-        logger.error(f"❌ 预约披露日定时同步失败: {e}", exc_info=True)
+        logger.error(f"预约披露日定时同步失败: {e}", exc_info=True)
         raise
+
+
+async def run_stock_hot_sync() -> int:
+    """
+    运行雪球股票热度数据同步（供 APScheduler 调用）
+
+    Returns:
+        同步的记录数
+    """
+    service = get_stock_hot_xueqiu_service()
+    try:
+        count = await service.sync_hot_data()
+        logger.info(f"雪球热度定时同步完成: {count} 条")
+        return count
+    except Exception as e:
+        logger.error(f"雪球热度定时同步失败: {e}", exc_info=True)
+        raise
+
+
+async def run_data_overview_sync(data_date: Optional[str] = None) -> dict:
+    """
+    运行数据概览定时同步（预约披露日 + 雪球热度）
+
+    将两个数据源聚合在一个定时任务中执行，
+    同时保留各自的独立同步函数以支持单独触发。
+
+    Args:
+        data_date: 预约披露日数据日期（可选）
+
+    Returns:
+        {"disclosure_calendar": int, "stock_hot": int}
+    """
+    dc_count = 0
+    hot_count = 0
+
+    # 1. 预约披露日
+    try:
+        dc_count = await run_disclosure_calendar_sync(data_date=data_date)
+    except Exception as e:
+        logger.error(f"数据概览-披露日同步失败: {e}", exc_info=True)
+
+    # 2. 雪球热度
+    try:
+        hot_count = await run_stock_hot_sync()
+    except Exception as e:
+        logger.error(f"数据概览-热度同步失败: {e}", exc_info=True)
+
+    logger.info(f"数据概览定时同步完成: 披露日={dc_count} 条, 热度={hot_count} 条")
+    return {"disclosure_calendar": dc_count, "stock_hot": hot_count}

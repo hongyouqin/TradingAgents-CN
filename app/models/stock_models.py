@@ -289,3 +289,45 @@ class DisclosureCalendarListResponse(BaseModel):
     page: int = 1
     page_size: int = 20
     message: str = ""
+
+
+# ===================== 股票热度（雪球）模块 =====================
+
+
+class StockHotXueqiuItem(BaseModel):
+    """雪球股票热度数据模型 - 对应 MongoDB stock_hot_xq 集合"""
+    stock_code: str = Field(..., description="股票代码（如 SH600519）")
+    stock_name: str = Field(..., description="股票名称")
+    followers: int = Field(0, description="关注人数")
+    current_price: Optional[float] = Field(None, description="现价")
+    category: str = Field(..., description="分类: 最热门 / 本周新增")
+    rank: int = Field(0, description="排名")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
+
+    class Config:
+        extra = "allow"
+        json_schema_extra = {
+            "example": {
+                "stock_code": "SH600519",
+                "stock_name": "贵州茅台",
+                "followers": 3671061,
+                "current_price": 1194.45,
+                "category": "最热门",
+                "rank": 1,
+            }
+        }
+
+
+class StockHotXueqiuResponse(BaseModel):
+    """雪球热度列表API响应"""
+    success: bool = True
+    data: Optional[List[StockHotXueqiuItem]] = None
+    total: int = 0
+    message: str = ""
+
+
+class StockHotXueqiuByCategoryResponse(BaseModel):
+    """雪球热度按分类查询API响应"""
+    success: bool = True
+    data: Optional[Dict[str, List[StockHotXueqiuItem]]] = None
+    message: str = ""
