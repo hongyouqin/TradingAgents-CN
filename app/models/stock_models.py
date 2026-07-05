@@ -243,3 +243,49 @@ class StockListResponse(BaseModel):
     page: int = 1
     page_size: int = 20
     message: str = ""
+
+
+# ===================== 预约披露日模块 =====================
+
+
+class DisclosureCalendarItem(BaseModel):
+    """预约披露日数据模型 - 对应 MongoDB disclosure_calendar 集合"""
+    stock_code: str = Field(..., description="6位股票代码")
+    stock_name: str = Field(..., description="股票简称")
+    first_schedule: Optional[datetime] = Field(None, description="首次预约时间")
+    first_change: Optional[datetime] = Field(None, description="一次变更日期")
+    second_change: Optional[datetime] = Field(None, description="二次变更日期")
+    third_change: Optional[datetime] = Field(None, description="三次变更日期")
+    actual_disclosure: Optional[datetime] = Field(None, description="实际披露时间")
+    latest_date: datetime = Field(..., description="最新预约披露日（取优先顺序：三次变更 > 二次变更 > 一次变更 > 首次预约）")
+    data_date: str = Field(..., description="数据对应的财报截止日期（如 20260630）")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="数据更新时间")
+
+    class Config:
+        extra = "allow"
+        json_schema_extra = {
+            "example": {
+                "stock_code": "002107",
+                "stock_name": "沃华医药",
+                "first_schedule": "2026-07-16T00:00:00",
+                "latest_date": "2026-07-16T00:00:00",
+                "data_date": "20260630",
+            }
+        }
+
+
+class DisclosureCalendarResponse(BaseModel):
+    """单条披露日API响应"""
+    success: bool = True
+    data: Optional[DisclosureCalendarItem] = None
+    message: str = ""
+
+
+class DisclosureCalendarListResponse(BaseModel):
+    """披露日列表API响应"""
+    success: bool = True
+    data: Optional[List[DisclosureCalendarItem]] = None
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+    message: str = ""

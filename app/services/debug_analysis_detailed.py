@@ -130,8 +130,8 @@ async def test_direct():
         )
         
         request = SingleAnalysisRequest(
-            symbol="603538",
-            stock_code="603538",
+            symbol="601991",
+            stock_code="601991",
             parameters=parameters
         )
         logger.info(f"✅ 请求创建成功: symbol={request.symbol}")

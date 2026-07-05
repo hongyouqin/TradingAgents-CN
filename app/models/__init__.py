@@ -14,7 +14,10 @@ from .stock_models import (
     MarketType,
     ExchangeType,
     CurrencyType,
-    StockStatus
+    StockStatus,
+    DisclosureCalendarItem,
+    DisclosureCalendarResponse,
+    DisclosureCalendarListResponse,
 )
 
 __all__ = [
@@ -28,5 +31,8 @@ __all__ = [
     "MarketType",
     "ExchangeType",
     "CurrencyType",
-    "StockStatus"
+    "StockStatus",
+    "DisclosureCalendarItem",
+    "DisclosureCalendarResponse",
+    "DisclosureCalendarListResponse",
 ]

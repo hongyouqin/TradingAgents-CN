@@ -1,0 +1,99 @@
+"""
+预约披露日 API 路由
+
+提供两个查询接口：
+1. GET /api/disclosure-calendar/{stock_code} — 按股票代码查询最新披露日
+2. GET /api/disclosure-calendar/list — 按披露日排序的分页列表（越近越靠前）
+"""
+import logging
+from typing import Optional 
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.routers.auth_db import get_current_user
+from app.services.disclosure_calendar_service import get_disclosure_calendar_service
+from app.models.stock_models import (
+    DisclosureCalendarResponse,
+    DisclosureCalendarListResponse,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/disclosure-calendar", tags=["预约披露日"])
+
+
+@router.get("/{stock_code}", response_model=DisclosureCalendarResponse)
+async def get_disclosure_by_stock(
+    stock_code: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    按股票代码查询最新预约披露日
+
+    Args:
+        stock_code: 6 位股票代码
+
+    Returns:
+        DisclosureCalendarResponse: 包含该股票的最新预约披露日信息
+    """
+    try:
+        service = get_disclosure_calendar_service()
+        item = await service.query_by_stock_code(stock_code)
+
+        if item is None:
+            return DisclosureCalendarResponse(
+                success=False,
+                data=None,
+                message=f"未找到股票代码 {stock_code} 的预约披露日信息",
+            )
+
+        return DisclosureCalendarResponse(
+            success=True,
+            data=item,
+            message="获取成功",
+        )
+
+    except Exception as e:
+        logger.error(f"❌ 查询预约披露日失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("", response_model=DisclosureCalendarListResponse)
+@router.get("/list", response_model=DisclosureCalendarListResponse)
+async def list_disclosure_calendar(
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+    data_date: Optional[str] = Query(None, description="财报数据截止日期，如 20260630"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    获取预约披露日分页列表，按披露日升序排列（越近越靠前）
+
+    Args:
+        page: 页码，从 1 开始
+        page_size: 每页条数 (1-100)
+        data_date: 可选，按财报数据截止日期筛选
+
+    Returns:
+        DisclosureCalendarListResponse: 分页列表
+    """
+    try:
+        service = get_disclosure_calendar_service()
+        result = await service.query_list(
+            page=page,
+            page_size=page_size,
+            data_date=data_date,
+        )
+
+        return DisclosureCalendarListResponse(
+            success=True,
+            data=result["items"],
+            total=result["total"],
+            page=result["page"],
+            page_size=result["page_size"],
+            message="获取成功",
+        )
+
+    except Exception as e:
+        logger.error(f"❌ 查询预约披露日列表失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
