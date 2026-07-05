@@ -62,6 +62,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from app.services.quotes_ingestion_service import QuotesIngestionService
 from app.routers import paper as paper_router
+from app.routers import data_overview as data_overview_router
 from app.services.recharge_package_service import recharge_package_service
 
 
@@ -683,7 +684,60 @@ async def lifespan(app: FastAPI):
         else:
             logger.info(f"📰 新闻数据同步已配置（仅自选股）: {settings.NEWS_SYNC_CRON}")
 
+        # ==================== 数据概览定时同步 ====================
+        from app.services.data_overview_service import (
+            run_data_overview_sync as _run_overview_sync,
+            run_disclosure_calendar_sync as _run_dc_sync,
+            run_stock_hot_sync as _run_hot_sync,
+            run_stock_hot_deal_sync as _run_deal_sync,
+            run_stock_hot_rank_em_sync as _run_rank_sync,
+        )
+        logger.info("📊 配置数据概览定时同步任务（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）...")
+        # 工作日每天 08:30 开盘前执行一次（聚合任务）
+        scheduler.add_job(
+            _run_overview_sync,
+            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
+            id="data_overview_sync",
+            name="数据概览同步（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）",
+        )
+        logger.info(f"📊 数据概览同步已配置: 工作日 08:30 ({settings.TIMEZONE})")
+
+        # 单独注册子任务ID，方便手动触发单次同步（默认暂停）
+        scheduler.add_job(
+            _run_dc_sync,
+            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
+            id="disclosure_calendar_sync",
+            name="预约披露日数据同步（AKShare）",
+        )
+        scheduler.pause_job("disclosure_calendar_sync")
+
+        scheduler.add_job(
+            _run_hot_sync,
+            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
+            id="stock_hot_sync",
+            name="雪球热度数据同步（AKShare）",
+        )
+        scheduler.pause_job("stock_hot_sync")
+
+        scheduler.add_job(
+            _run_deal_sync,
+            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
+            id="stock_hot_deal_sync",
+            name="雪球交易排行榜数据同步（AKShare）",
+        )
+        scheduler.pause_job("stock_hot_deal_sync")
+
+        scheduler.add_job(
+            _run_rank_sync,
+            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
+            id="stock_hot_rank_em_sync",
+            name="东方财富人气榜数据同步（AKShare）",
+        )
+        scheduler.pause_job("stock_hot_rank_em_sync")
+
         scheduler.start()
+        
+        # asyncio.create_task(_run_dc_sync())
 
         # 启动补偿算力账户消费冻结服务
         compensation_service.set_logger(logger = logger)
@@ -873,6 +927,12 @@ app.include_router(internal_messages.router, tags=["internal-messages"])
 app.include_router(admin_stats_api.router, prefix="/api", tags=["管理员-统计大盘"])
 app.include_router(sign_router.router, prefix="/api", tags=["签到"])
 app.include_router(expense_ledger_router.router, tags=["支出账本"])
+
+# 数据概览路由（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）
+app.include_router(data_overview_router.router)
+app.include_router(data_overview_router.hot_router)
+app.include_router(data_overview_router.deal_router)
+app.include_router(data_overview_router.rank_router)
 
 
 @app.get("/")

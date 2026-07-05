@@ -1,11 +1,13 @@
 """
-数据概览服务（预约披露日 + 股票热度）
+数据概览服务（预约披露日 + 雪球热度 + 交易排行榜 + 东方财富人气榜）
 
 功能：
 1. 通过 AKShare 获取 A 股预约披露日历
 2. 通过 AKShare 获取雪球股票热度（最热门 / 本周新增）
-3. 全量替换写入 MongoDB disclosure_calendar / stock_hot_xq 集合
-4. 提供查询接口和定时同步入口
+3. 通过 AKShare 获取雪球交易排行榜
+4. 通过 AKShare 获取东方财富人气榜
+5. 全量替换写入 MongoDB collections
+6. 提供查询接口和定时同步入口
 """
 import logging
 from datetime import datetime, timezone
@@ -501,10 +503,254 @@ class StockHotXueqiuService:
         return result
 
 
+# ===================== 交易排行榜（雪球）服务 =====================
+
+STOCK_HOT_DEAL_COLLECTION = "stock_hot_deal_xq"
+
+
+class StockHotDealXueqiuService:
+    """雪球交易排行榜服务（最热门）"""
+
+    DEAL_SYMBOL = "最热门"
+
+    def __init__(self):
+        self._db: Optional[AsyncIOMotorDatabase] = None
+
+    async def _get_db(self) -> AsyncIOMotorDatabase:
+        if self._db is None:
+            self._db = get_mongo_db()
+        return self._db
+
+    # ---- 数据获取 ----
+
+    async def fetch_deal_data(self) -> List[Dict[str, Any]]:
+        """
+        从 AKShare 获取雪球交易排行榜
+
+        Returns:
+            交易排行记录列表
+        """
+        import asyncio
+        import akshare as ak
+
+        try:
+            def _fetch():
+                return ak.stock_hot_deal_xq(symbol=self.DEAL_SYMBOL)
+
+            loop = asyncio.get_event_loop()
+            df = await loop.run_in_executor(None, _fetch)
+
+            if df is None or (hasattr(df, "empty") and df.empty):
+                logger.warning("交易排行榜返回空数据")
+                return []
+
+            records = []
+            for rank, (_, row) in enumerate(df.iterrows(), start=1):
+                records.append({
+                    "stock_code": str(row.iloc[0]) if len(row) > 0 else "",
+                    "stock_name": str(row.iloc[1]) if len(row) > 1 else "",
+                    "deal_attention": int(row.iloc[2]) if len(row) > 2 and pd.notna(row.iloc[2]) else 0,
+                    "current_price": float(row.iloc[3]) if len(row) > 3 and pd.notna(row.iloc[3]) else None,
+                    "rank": rank,
+                })
+
+            logger.info(f"交易排行榜获取成功: {len(records)} 条")
+            return records
+
+        except Exception as e:
+            logger.error(f"交易排行榜获取失败: {e}", exc_info=True)
+            return []
+
+    # ---- 数据库同步 ----
+
+    async def _ensure_indexes(self):
+        """确保集合索引存在"""
+        db = await self._get_db()
+        col = db[STOCK_HOT_DEAL_COLLECTION]
+
+        await col.create_index("stock_code", unique=True, name="deal_stock_code")
+        await col.create_index([("rank", 1)], name="deal_rank")
+        await col.create_index([("deal_attention", -1)], name="deal_attention_desc")
+
+    async def sync_deal_data(self) -> int:
+        """
+        全量同步雪球交易排行榜
+
+        Returns:
+            写入记录数
+        """
+        db = await self._get_db()
+        await self._ensure_indexes()
+
+        records = await self.fetch_deal_data()
+        if not records:
+            logger.warning("交易排行榜数据为空，跳过同步")
+            return 0
+
+        col = db[STOCK_HOT_DEAL_COLLECTION]
+        now_utc = datetime.utcnow()
+
+        # 先全量删除旧数据
+        delete_result = await col.delete_many({})
+        logger.info(f"删除旧交易排行数据: deleted={delete_result.deleted_count}")
+
+        # 写入 updated_at
+        for rec in records:
+            rec["updated_at"] = now_utc
+
+        # 批量插入
+        insert_result = await col.insert_many(records, ordered=False)
+        logger.info(f"交易排行榜写入完成: {len(insert_result.inserted_ids)} 条")
+        return len(insert_result.inserted_ids)
+
+    # ---- 查询接口 ----
+
+    async def query_all(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        查询交易排行榜
+
+        Args:
+            limit: 返回条数
+
+        Returns:
+            排行列表
+        """
+        db = await self._get_db()
+        col = db[STOCK_HOT_DEAL_COLLECTION]
+
+        cursor = (
+            col.find({}, {"_id": 0})
+            .sort("rank", 1)
+            .limit(limit)
+        )
+
+        items = []
+        async for doc in cursor:
+            items.append(doc)
+
+        return items
+
+
+# ===================== 人气榜（东方财富）服务 =====================
+
+STOCK_HOT_RANK_EM_COLLECTION = "stock_hot_rank_em"
+
+# 列名映射：东方财富人气榜列索引
+# 当前排名=iloc[0], 代码=iloc[1], 股票名称=iloc[2], 最新价=iloc[3], 涨跌额=iloc[4], 涨跌幅=iloc[5]
+
+
+class StockHotRankEMService:
+    """东方财富人气榜服务"""
+
+    async def _get_db(self) -> AsyncIOMotorDatabase:
+        if not hasattr(self, '_db') or self._db is None:
+            self._db = get_mongo_db()
+        return self._db
+
+    # ---- 数据获取 ----
+
+    async def fetch_rank_data(self) -> List[Dict[str, Any]]:
+        """
+        从 AKShare 获取东方财富人气榜
+
+        Returns:
+            人气排行记录列表
+        """
+        import asyncio
+        import akshare as ak
+
+        try:
+            def _fetch():
+                return ak.stock_hot_rank_em()
+
+            loop = asyncio.get_event_loop()
+            df = await loop.run_in_executor(None, _fetch)
+
+            if df is None or (hasattr(df, "empty") and df.empty):
+                logger.warning("人气榜返回空数据")
+                return []
+
+            records = []
+            for _, row in df.iterrows():
+                records.append({
+                    "rank": int(row.iloc[0]) if len(row) > 0 and pd.notna(row.iloc[0]) else 0,
+                    "stock_code": str(row.iloc[1]) if len(row) > 1 else "",
+                    "stock_name": str(row.iloc[2]) if len(row) > 2 else "",
+                    "current_price": float(row.iloc[3]) if len(row) > 3 and pd.notna(row.iloc[3]) else None,
+                    "change_amount": float(row.iloc[4]) if len(row) > 4 and pd.notna(row.iloc[4]) else None,
+                    "change_percent": float(row.iloc[5]) if len(row) > 5 and pd.notna(row.iloc[5]) else None,
+                })
+
+            logger.info(f"人气榜获取成功: {len(records)} 条")
+            return records
+
+        except Exception as e:
+            logger.error(f"人气榜获取失败: {e}", exc_info=True)
+            return []
+
+    # ---- 数据库同步 ----
+
+    async def _ensure_indexes(self):
+        """确保集合索引存在"""
+        db = await self._get_db()
+        col = db[STOCK_HOT_RANK_EM_COLLECTION]
+
+        await col.create_index("stock_code", unique=True, name="rank_stock_code")
+        await col.create_index([("rank", 1)], name="rank_order")
+
+    async def sync_rank_data(self) -> int:
+        """
+        全量同步东方财富人气榜
+
+        Returns:
+            写入记录数
+        """
+        db = await self._get_db()
+        await self._ensure_indexes()
+
+        records = await self.fetch_rank_data()
+        if not records:
+            logger.warning("人气榜数据为空，跳过同步")
+            return 0
+
+        col = db[STOCK_HOT_RANK_EM_COLLECTION]
+        now_utc = datetime.utcnow()
+
+        # 全量删除旧数据
+        delete_result = await col.delete_many({})
+        logger.info(f"删除旧人气榜数据: deleted={delete_result.deleted_count}")
+
+        for rec in records:
+            rec["updated_at"] = now_utc
+
+        insert_result = await col.insert_many(records, ordered=False)
+        logger.info(f"人气榜写入完成: {len(insert_result.inserted_ids)} 条")
+        return len(insert_result.inserted_ids)
+
+    # ---- 查询接口 ----
+
+    async def query_all(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """查询人气榜"""
+        db = await self._get_db()
+        col = db[STOCK_HOT_RANK_EM_COLLECTION]
+
+        cursor = (
+            col.find({}, {"_id": 0})
+            .sort("rank", 1)
+            .limit(limit)
+        )
+        items = []
+        async for doc in cursor:
+            items.append(doc)
+        return items
+
+
 # ===================== 全局单例 =====================
 
 _disclosure_calendar_service: Optional[DisclosureCalendarService] = None
 _stock_hot_service: Optional[StockHotXueqiuService] = None
+_stock_hot_deal_service: Optional[StockHotDealXueqiuService] = None
+_stock_hot_rank_em_service: Optional[StockHotRankEMService] = None
 
 
 def get_disclosure_calendar_service() -> DisclosureCalendarService:
@@ -521,6 +767,22 @@ def get_stock_hot_xueqiu_service() -> StockHotXueqiuService:
     if _stock_hot_service is None:
         _stock_hot_service = StockHotXueqiuService()
     return _stock_hot_service
+
+
+def get_stock_hot_deal_xueqiu_service() -> StockHotDealXueqiuService:
+    """获取雪球交易排行服务单例"""
+    global _stock_hot_deal_service
+    if _stock_hot_deal_service is None:
+        _stock_hot_deal_service = StockHotDealXueqiuService()
+    return _stock_hot_deal_service
+
+
+def get_stock_hot_rank_em_service() -> StockHotRankEMService:
+    """获取东方财富人气榜服务单例"""
+    global _stock_hot_rank_em_service
+    if _stock_hot_rank_em_service is None:
+        _stock_hot_rank_em_service = StockHotRankEMService()
+    return _stock_hot_rank_em_service
 
 
 # ---- 供调度器调用的同步函数（数据概览）----
@@ -562,21 +824,57 @@ async def run_stock_hot_sync() -> int:
         raise
 
 
+async def run_stock_hot_deal_sync() -> int:
+    """
+    运行雪球交易排行榜同步（供 APScheduler 调用）
+
+    Returns:
+        同步的记录数
+    """
+    service = get_stock_hot_deal_xueqiu_service()
+    try:
+        count = await service.sync_deal_data()
+        logger.info(f"交易排行榜定时同步完成: {count} 条")
+        return count
+    except Exception as e:
+        logger.error(f"交易排行榜定时同步失败: {e}", exc_info=True)
+        raise
+
+
+async def run_stock_hot_rank_em_sync() -> int:
+    """
+    运行东方财富人气榜同步（供 APScheduler 调用）
+
+    Returns:
+        同步的记录数
+    """
+    service = get_stock_hot_rank_em_service()
+    try:
+        count = await service.sync_rank_data()
+        logger.info(f"人气榜定时同步完成: {count} 条")
+        return count
+    except Exception as e:
+        logger.error(f"人气榜定时同步失败: {e}", exc_info=True)
+        raise
+
+
 async def run_data_overview_sync(data_date: Optional[str] = None) -> dict:
     """
-    运行数据概览定时同步（预约披露日 + 雪球热度）
+    运行数据概览定时同步（预约披露日 + 雪球热度 + 交易排行榜 + 东方财富人气榜）
 
-    将两个数据源聚合在一个定时任务中执行，
+    将多个数据源聚合在一个定时任务中执行，
     同时保留各自的独立同步函数以支持单独触发。
 
     Args:
         data_date: 预约披露日数据日期（可选）
 
     Returns:
-        {"disclosure_calendar": int, "stock_hot": int}
+        {"disclosure_calendar": int, "stock_hot": int, "stock_hot_deal": int, "stock_hot_rank_em": int}
     """
     dc_count = 0
     hot_count = 0
+    deal_count = 0
+    rank_count = 0
 
     # 1. 预约披露日
     try:
@@ -584,11 +882,31 @@ async def run_data_overview_sync(data_date: Optional[str] = None) -> dict:
     except Exception as e:
         logger.error(f"数据概览-披露日同步失败: {e}", exc_info=True)
 
-    # 2. 雪球热度
+    # 2. 雪球热度（关注榜）
     try:
         hot_count = await run_stock_hot_sync()
     except Exception as e:
         logger.error(f"数据概览-热度同步失败: {e}", exc_info=True)
 
-    logger.info(f"数据概览定时同步完成: 披露日={dc_count} 条, 热度={hot_count} 条")
-    return {"disclosure_calendar": dc_count, "stock_hot": hot_count}
+    # 3. 雪球交易排行榜
+    try:
+        deal_count = await run_stock_hot_deal_sync()
+    except Exception as e:
+        logger.error(f"数据概览-交易排行同步失败: {e}", exc_info=True)
+
+    # 4. 东方财富人气榜
+    try:
+        rank_count = await run_stock_hot_rank_em_sync()
+    except Exception as e:
+        logger.error(f"数据概览-人气榜同步失败: {e}", exc_info=True)
+
+    logger.info(
+        f"数据概览定时同步完成: 披露日={dc_count} 条, "
+        f"热度={hot_count} 条, 交易排行={deal_count} 条, 人气榜={rank_count} 条"
+    )
+    return {
+        "disclosure_calendar": dc_count,
+        "stock_hot": hot_count,
+        "stock_hot_deal": deal_count,
+        "stock_hot_rank_em": rank_count,
+    }

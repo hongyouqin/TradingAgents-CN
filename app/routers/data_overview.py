@@ -1,5 +1,5 @@
 """
-数据概览 API 路由（预约披露日 + 雪球股票热度）
+数据概览 API 路由（预约披露日 + 雪球热度 + 交易排行榜 + 东方财富人气榜）
 
 预约披露日接口：
 1. GET /api/disclosure-calendar/{stock_code} — 按股票代码查询最新披露日
@@ -8,6 +8,12 @@
 雪球热度接口：
 1. GET /api/stock-hot/{category} — 按分类查询热度排行
 2. GET /api/stock-hot/all — 查询所有分类热度数据
+
+交易排行榜接口：
+1. GET /api/stock-hot-deal — 查询交易排行榜
+
+人气榜接口：
+1. GET /api/stock-hot-rank — 查询东方财富人气榜
 """
 import logging
 from typing import Optional
@@ -15,22 +21,34 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.routers.auth_db import get_current_user
-from app.services.disclosure_calendar_service import get_disclosure_calendar_service
-from app.services.disclosure_calendar_service import get_stock_hot_xueqiu_service
+from app.services.data_overview_service import get_disclosure_calendar_service
+from app.services.data_overview_service import get_stock_hot_xueqiu_service
+from app.services.data_overview_service import get_stock_hot_deal_xueqiu_service
+from app.services.data_overview_service import get_stock_hot_rank_em_service
 from app.models.stock_models import (
     DisclosureCalendarResponse,
     DisclosureCalendarListResponse,
     StockHotXueqiuResponse,
     StockHotXueqiuByCategoryResponse,
     StockHotXueqiuItem,
+    StockHotDealXueqiuResponse,
+    StockHotDealXueqiuItem,
+    StockHotRankEMResponse,
+    StockHotRankEMItem,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/disclosure-calendar", tags=["预约披露日"])
 
-# 雪球热度路由（挂在同一标签但使用独立前缀）
+# 雪球热度路由（使用独立前缀）
 hot_router = APIRouter(prefix="/api/stock-hot", tags=["雪球热度"])
+
+# 雪球交易排行路由
+deal_router = APIRouter(prefix="/api/stock-hot-deal", tags=["雪球交易排行"])
+
+# 东方财富人气榜路由
+rank_router = APIRouter(prefix="/api/stock-hot-rank", tags=["东方财富人气榜"])
 
 
 @router.get("/{stock_code}", response_model=DisclosureCalendarResponse)
@@ -180,4 +198,68 @@ async def get_all_stock_hot(
         )
     except Exception as e:
         logger.error(f"❌ 查询雪球热度失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+# ===================== 雪球交易排行榜接口 =====================
+
+
+@deal_router.get("", response_model=StockHotDealXueqiuResponse)
+async def get_stock_hot_deal(
+    limit: int = Query(50, ge=1, le=200, description="返回条数"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    查询雪球交易排行榜
+
+    Args:
+        limit: 返回条数 (1-200)
+
+    Returns:
+        StockHotDealXueqiuResponse: 交易排行列表
+    """
+    try:
+        service = get_stock_hot_deal_xueqiu_service()
+        items = await service.query_all(limit=limit)
+
+        return StockHotDealXueqiuResponse(
+            success=True,
+            data=[StockHotDealXueqiuItem(**item) for item in items],
+            total=len(items),
+            message="获取交易排行榜成功",
+        )
+    except Exception as e:
+        logger.error(f"❌ 查询交易排行榜失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+# ===================== 东方财富人气榜接口 =====================
+
+
+@rank_router.get("", response_model=StockHotRankEMResponse)
+async def get_stock_hot_rank(
+    limit: int = Query(50, ge=1, le=200, description="返回条数"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    查询东方财富人气榜
+
+    Args:
+        limit: 返回条数 (1-200)
+
+    Returns:
+        StockHotRankEMResponse: 人气排行列表
+    """
+    try:
+        service = get_stock_hot_rank_em_service()
+        items = await service.query_all(limit=limit)
+
+        return StockHotRankEMResponse(
+            success=True,
+            data=[StockHotRankEMItem(**item) for item in items],
+            total=len(items),
+            message="获取人气榜成功",
+        )
+    except Exception as e:
+        logger.error(f"❌ 查询人气榜失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")

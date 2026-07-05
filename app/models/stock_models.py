@@ -331,3 +331,71 @@ class StockHotXueqiuByCategoryResponse(BaseModel):
     success: bool = True
     data: Optional[Dict[str, List[StockHotXueqiuItem]]] = None
     message: str = ""
+
+
+# ===================== 交易排行榜（雪球）模块 =====================
+
+
+class StockHotDealXueqiuItem(BaseModel):
+    """雪球交易排行数据模型 - 对应 MongoDB stock_hot_deal_xq 集合"""
+    stock_code: str = Field(..., description="股票代码（如 SH600519）")
+    stock_name: str = Field(..., description="股票名称")
+    deal_attention: int = Field(0, description="交易关注度")
+    current_price: Optional[float] = Field(None, description="最新价")
+    rank: int = Field(0, description="排名")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
+
+    class Config:
+        extra = "allow"
+        json_schema_extra = {
+            "example": {
+                "stock_code": "SH600519",
+                "stock_name": "贵州茅台",
+                "deal_attention": 473,
+                "current_price": 1194.45,
+                "rank": 1,
+            }
+        }
+
+
+class StockHotDealXueqiuResponse(BaseModel):
+    """雪球交易排行API响应"""
+    success: bool = True
+    data: Optional[List[StockHotDealXueqiuItem]] = None
+    total: int = 0
+    message: str = ""
+
+
+# ===================== 人气榜（东方财富）模块 =====================
+
+
+class StockHotRankEMItem(BaseModel):
+    """东方财富人气榜数据模型 - 对应 MongoDB stock_hot_rank_em 集合"""
+    stock_code: str = Field(..., description="股票代码（如 SZ301308）")
+    stock_name: str = Field(..., description="股票名称")
+    current_price: Optional[float] = Field(None, description="最新价")
+    change_amount: Optional[float] = Field(None, description="涨跌额")
+    change_percent: Optional[float] = Field(None, description="涨跌幅")
+    rank: int = Field(0, description="当前排名")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
+
+    class Config:
+        extra = "allow"
+        json_schema_extra = {
+            "example": {
+                "stock_code": "SZ301308",
+                "stock_name": "江波龙",
+                "current_price": 618.02,
+                "change_amount": 19.41,
+                "change_percent": 3.14,
+                "rank": 1,
+            }
+        }
+
+
+class StockHotRankEMResponse(BaseModel):
+    """东方财富人气榜API响应"""
+    success: bool = True
+    data: Optional[List[StockHotRankEMItem]] = None
+    total: int = 0
+    message: str = ""
