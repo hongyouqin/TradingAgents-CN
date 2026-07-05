@@ -88,11 +88,9 @@ async def get_disclosure_by_stock(
 
 
 @router.get("", response_model=DisclosureCalendarListResponse)
-@router.get("/list", response_model=DisclosureCalendarListResponse)
 async def list_disclosure_calendar(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页条数"),
-    data_date: Optional[str] = Query(None, description="财报数据截止日期，如 20260630"),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -111,7 +109,7 @@ async def list_disclosure_calendar(
         result = await service.query_list(
             page=page,
             page_size=page_size,
-            data_date=data_date,
+            data_date=None,
         )
 
         return DisclosureCalendarListResponse(

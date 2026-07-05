@@ -447,15 +447,25 @@ class StockHotXueqiuService:
                 f"删除旧热度数据: category={category}, deleted={delete_result.deleted_count}"
             )
 
-            # 写入 updated_at
+            # 写入 updated_at，并按 stock_code 去重（保留首次出现的记录，即排名更靠前的）
+            seen_codes: set = set()
+            deduped: List[Dict[str, Any]] = []
             for rec in records:
-                rec["updated_at"] = now_utc
+                code = rec.get("stock_code", "")
+                if code and code not in seen_codes:
+                    seen_codes.add(code)
+                    rec["updated_at"] = now_utc
+                    deduped.append(rec)
 
-            # 批量插入
-            if records:
-                insert_result = await col.insert_many(records, ordered=False)
-                total_inserted += len(insert_result.inserted_ids)
-                logger.info(f"热度[{category}] 写入完成: {len(insert_result.inserted_ids)} 条")
+            # 批量插入（已去重，不会触发唯一索引冲突）
+            if deduped:
+                try:
+                    insert_result = await col.insert_many(deduped, ordered=False)
+                    total_inserted += len(insert_result.inserted_ids)
+                    logger.info(f"热度[{category}] 写入完成: {len(insert_result.inserted_ids)} 条"
+                                f"（原始 {len(records)} 条，去重 {len(records) - len(deduped)} 条）")
+                except Exception as e:
+                    logger.error(f"热度[{category}] 批量写入失败: {e}")
 
         logger.info(f"雪球热度全量同步完成: 共 {total_inserted} 条")
         return total_inserted
@@ -594,14 +604,27 @@ class StockHotDealXueqiuService:
         delete_result = await col.delete_many({})
         logger.info(f"删除旧交易排行数据: deleted={delete_result.deleted_count}")
 
-        # 写入 updated_at
+        # 写入 updated_at，并按 stock_code 去重
+        seen_codes: set = set()
+        deduped: List[Dict[str, Any]] = []
         for rec in records:
-            rec["updated_at"] = now_utc
+            code = rec.get("stock_code", "")
+            if code and code not in seen_codes:
+                seen_codes.add(code)
+                rec["updated_at"] = now_utc
+                deduped.append(rec)
 
-        # 批量插入
-        insert_result = await col.insert_many(records, ordered=False)
-        logger.info(f"交易排行榜写入完成: {len(insert_result.inserted_ids)} 条")
-        return len(insert_result.inserted_ids)
+        # 批量插入（已去重）
+        if deduped:
+            try:
+                insert_result = await col.insert_many(deduped, ordered=False)
+                logger.info(f"交易排行榜写入完成: {len(insert_result.inserted_ids)} 条"
+                            f"（原始 {len(records)} 条，去重 {len(records) - len(deduped)} 条）")
+                return len(insert_result.inserted_ids)
+            except Exception as e:
+                logger.error(f"交易排行榜批量写入失败: {e}")
+                return 0
+        return 0
 
     # ---- 查询接口 ----
 

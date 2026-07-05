@@ -687,7 +687,6 @@ async def lifespan(app: FastAPI):
         # ==================== 数据概览定时同步 ====================
         from app.services.data_overview_service import (
             run_data_overview_sync as _run_overview_sync,
-            run_disclosure_calendar_sync as _run_dc_sync,
             run_stock_hot_sync as _run_hot_sync,
             run_stock_hot_deal_sync as _run_deal_sync,
             run_stock_hot_rank_em_sync as _run_rank_sync,
@@ -701,44 +700,8 @@ async def lifespan(app: FastAPI):
             name="数据概览同步（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）",
         )
         logger.info(f"📊 数据概览同步已配置: 工作日 08:30 ({settings.TIMEZONE})")
-
-        # 单独注册子任务ID，方便手动触发单次同步（默认暂停）
-        scheduler.add_job(
-            _run_dc_sync,
-            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
-            id="disclosure_calendar_sync",
-            name="预约披露日数据同步（AKShare）",
-        )
-        scheduler.pause_job("disclosure_calendar_sync")
-
-        scheduler.add_job(
-            _run_hot_sync,
-            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
-            id="stock_hot_sync",
-            name="雪球热度数据同步（AKShare）",
-        )
-        scheduler.pause_job("stock_hot_sync")
-
-        scheduler.add_job(
-            _run_deal_sync,
-            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
-            id="stock_hot_deal_sync",
-            name="雪球交易排行榜数据同步（AKShare）",
-        )
-        scheduler.pause_job("stock_hot_deal_sync")
-
-        scheduler.add_job(
-            _run_rank_sync,
-            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
-            id="stock_hot_rank_em_sync",
-            name="东方财富人气榜数据同步（AKShare）",
-        )
-        scheduler.pause_job("stock_hot_rank_em_sync")
-
         scheduler.start()
         
-        # asyncio.create_task(_run_dc_sync())
-
         # 启动补偿算力账户消费冻结服务
         compensation_service.set_logger(logger = logger)
         compensation_service.start_compensation_loop()        
