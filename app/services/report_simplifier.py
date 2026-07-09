@@ -557,12 +557,10 @@ class ReportSimplifier:
                     **simplified_data
                 }
                 
-                # 格式化提示词
-                prompt = self._html_generation_prompt.format(
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    simplified_data=json.dumps(enhanced_data, ensure_ascii=False, indent=2)
-                )
+                # 格式化提示词（使用 replace 避免 CSS 花括号与 .format() 冲突）
+                prompt = self._html_generation_prompt.replace("{stock_code}", stock_code)
+                prompt = prompt.replace("{stock_name}", stock_name)
+                prompt = prompt.replace("{simplified_data}", json.dumps(enhanced_data, ensure_ascii=False, indent=2))
                 
                 logger.info(f"📝 HTML生成提示词长度: {len(prompt)} 字符")
                 logger.info(f"  模型: {llm_config['model_name']}")
@@ -717,6 +715,421 @@ class ReportSimplifier:
         logger.warning(f"⚠️ 无法提取HTML结构，返回原始响应")
         return response.strip()
     
+    def _generate_html(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> str:
+        """直接从结构化数据生成标准HTML（无需LLM调用）
+
+        渲染完整的模块顺序：
+        英雄区 → 公司介绍+题材关键词 → 深度洞察 → 核心回顾
+        → TET指标 → 风险 → 炒作点 → 短期展望 → 多空分歧 → 待办 → 金句
+        """
+        # 提取各模块数据
+        executive_summary = simplified_data.get("executive_summary", "")
+        company_intro = simplified_data.get("company_intro", "")
+        theme_keywords = simplified_data.get("theme_keywords", [])
+        insight_and_decision = simplified_data.get("insight_and_decision", "")
+        core_review = simplified_data.get("core_review", {})
+        personal_view_and_risk = simplified_data.get("personal_view_and_risk", "")
+        hype_analysis = simplified_data.get("炒作点分析", "")
+        short_term_outlook = simplified_data.get("short_term_outlook", {})
+        core_disagreement = simplified_data.get("core_disagreement", {})
+        action_items = simplified_data.get("action_items", [])
+        golden_quote = simplified_data.get("golden_quote", "谋定而后动，知止而有得")
+
+        # TET 四指标（从 tet_indicators 提取，否则从简化数据顶层提取）
+        tet = simplified_data.get("tet_indicators", {})
+        if not tet:
+            tet = {
+                "trend_score": simplified_data.get("trend_score"),
+                "emotion_index": simplified_data.get("emotion_index"),
+                "anchored_trend_score": simplified_data.get("anchored_trend_score"),
+                "timing_indicator": simplified_data.get("timing_indicator"),
+            }
+
+        # 构建题材标签HTML
+        tags_html = ""
+        if theme_keywords:
+            tags_html = '<div class="tags">' + "".join(
+                f'<span class="tag">{kw}</span>' for kw in theme_keywords
+            ) + "</div>"
+
+        # 构建公司介绍HTML
+        company_intro_html = ""
+        if company_intro:
+            company_intro_html = f"""
+        <div class="card">
+            <h2>🏢 公司介绍</h2>
+            <p class="company-intro">{company_intro}</p>
+            {tags_html}
+        </div>"""
+
+        # 构建深度洞察HTML
+        insight_html = ""
+        if insight_and_decision:
+            insight_html = f"""
+        <div class="card">
+            <h2>🎯 深度洞察 & 决策</h2>
+            <div class="insight-content">{insight_and_decision}</div>
+        </div>"""
+
+        # 构建核心回顾HTML
+        core_review_html = ""
+        review_items = {
+            "fundamentals": ("📈", "基本面"),
+            "news": ("📰", "新闻面"),
+            "technical": ("📉", "技术面"),
+            "sentiment": ("🎭", "情绪面"),
+        }
+        reviews = ""
+        for key, (emoji, label) in review_items.items():
+            content = core_review.get(key, "")
+            if content:
+                reviews += f"""
+                <div class="review-item">
+                    <h4>{emoji} {label}</h4>
+                    <p>{content}</p>
+                </div>"""
+        if reviews:
+            core_review_html = f"""
+        <div class="card">
+            <h2>📊 核心回顾</h2>
+            <div class="review-grid">{reviews}</div>
+        </div>"""
+
+        # 构建 TET 四指标展示区
+        tet_html = ""
+        tet_items = [
+            ("trend_score", "📈", "趋势得分<br><small>Trend-Score</small>"),
+            ("emotion_index", "🎭", "情绪指数<br><small>Emotion-Index</small>"),
+            ("anchored_trend_score", "⚓", "锚定趋势得分<br><small>Anchored Trend</small>"),
+            ("timing_indicator", "🎯", "时机指标<br><small>Timing-Indicator</small>"),
+        ]
+        tet_cards = ""
+        for key, emoji, label in tet_items:
+            val = tet.get(key)
+            if val is not None:
+                # 根据正负显示颜色
+                val_num = float(val) if not isinstance(val, (int, float)) else val
+                color = "#22c55e" if val_num > 0.3 else ("#ef4444" if val_num < -0.3 else "#f59e0b")
+                arrow = "↑" if val_num > 0 else ("↓" if val_num < 0 else "→")
+                tet_cards += f"""
+                <div class="tet-card">
+                    <div class="tet-emoji">{emoji}</div>
+                    <div class="tet-value" style="color:{color}">{val_num:+.2f} {arrow}</div>
+                    <div class="tet-label">{label}</div>
+                </div>"""
+        if tet_cards:
+            tet_html = f"""
+        <div class="card">
+            <h2>🧭 趋势-情绪-时机指标</h2>
+            <div class="tet-grid">{tet_cards}</div>
+        </div>"""
+
+        # 构建风险HTML
+        risk_html = ""
+        if personal_view_and_risk:
+            risk_html = f"""
+        <div class="card">
+            <h2>⚠️ 个人看法 & 风险警示</h2>
+            <div class="risk-box">{personal_view_and_risk}</div>
+        </div>"""
+
+        # 构建炒作点分析HTML
+        hype_html = ""
+        if hype_analysis:
+            hype_html = f"""
+        <div class="card">
+            <h2>🔥 炒作点分析</h2>
+            <p>{hype_analysis}</p>
+        </div>"""
+
+        # 构建短期展望HTML
+        outlook_html = ""
+        possibility = short_term_outlook.get("possibility", "")
+        reason = short_term_outlook.get("reason", "")
+        if possibility or reason:
+            # 可能性标记颜色
+            poss_color = "#22c55e" if possibility == "高" else ("#f59e0b" if possibility == "中" else "#ef4444")
+            outlook_html = f"""
+        <div class="card">
+            <h2>🔮 短期展望</h2>
+            <div class="outlook-item">
+                <span class="outlook-label">上涨可能性</span>
+                <span class="outlook-badge" style="background:{poss_color}20;color:{poss_color};border:1px solid {poss_color}40">{possibility}</span>
+            </div>
+            <p class="outlook-reason">{reason}</p>
+        </div>"""
+
+        # 构建多空分歧HTML
+        disagreement_html = ""
+        if core_disagreement:
+            bullish = core_disagreement.get("bullish_arguments", "")
+            bearish = core_disagreement.get("bearish_arguments", "")
+            consensus = core_disagreement.get("consensus", "")
+            key_disagreement = core_disagreement.get("key_disagreement", "")
+            if any([bullish, bearish, consensus, key_disagreement]):
+                disagreement_html = f"""
+        <div class="card">
+            <h2>⚔️ 多空分歧</h2>
+            <div class="disagreement-grid">
+                <div class="disagreement-bullish">
+                    <h4>🐂 看多方</h4>
+                    <p>{bullish}</p>
+                </div>
+                <div class="disagreement-bearish">
+                    <h4>🐻 看空方</h4>
+                    <p>{bearish}</p>
+                </div>
+            </div>
+            <div class="disagreement-consensus">
+                <h4>🤝 共识</h4>
+                <p>{consensus}</p>
+            </div>
+            <div class="disagreement-key">
+                <h4>💡 核心分歧</h4>
+                <p>{key_disagreement}</p>
+            </div>
+        </div>"""
+
+        # 构建待办事项HTML
+        actions_html = ""
+        if action_items:
+            items = "".join(f"<li>{item}</li>" for item in action_items)
+            actions_html = f"""
+        <div class="card">
+            <h2>✅ 待办事项</h2>
+            <ul class="action-list">{items}</ul>
+        </div>"""
+
+        # 构建金句HTML
+        quote_html = ""
+        if golden_quote:
+            quote_html = f"""
+        <div class="golden-quote">💬 {golden_quote}</div>"""
+
+        # 组装完整HTML
+        html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>牛逼股票 · {stock_name}({stock_code})</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #f0f4f8;
+            color: #1e293b;
+            line-height: 1.8;
+            padding: 0;
+            margin: 0;
+        }}
+        .container {{ max-width: 800px; margin: 0 auto; padding: 0 16px; }}
+        .hero {{
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 48px 20px;
+            border-radius: 0 0 32px 32px;
+            margin-bottom: 24px;
+            text-align: center;
+        }}
+        .hero h1 {{
+            font-family: 'Poppins', sans-serif;
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            letter-spacing: 1px;
+        }}
+        .hero .subtitle {{
+            font-size: 14px;
+            opacity: 0.8;
+            margin-bottom: 8px;
+        }}
+        .hero .summary {{
+            font-size: 20px;
+            line-height: 1.7;
+            max-width: 680px;
+            margin: 0 auto;
+            opacity: 0.95;
+        }}
+        .card {{
+            background: #ffffff;
+            border-radius: 20px;
+            padding: 28px 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+            transition: box-shadow 0.2s;
+        }}
+        .card h2 {{
+            font-family: 'Poppins', sans-serif;
+            font-size: 22px;
+            color: #1e40af;
+            margin-bottom: 16px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e8f0fe;
+        }}
+        .card p {{ font-size: 16px; color: #334155; line-height: 1.8; white-space: pre-wrap; }}
+        /* 公司介绍 */
+        .company-intro {{ font-size: 16px; color: #334155; }}
+        .tags {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }}
+        .tag {{
+            display: inline-block;
+            background: #fff7ed;
+            color: #f97316;
+            font-size: 13px;
+            font-weight: 500;
+            padding: 4px 14px;
+            border-radius: 20px;
+            border: 1px solid #fed7aa;
+        }}
+        /* 核心回顾网格 */
+        .review-grid {{ display: grid; grid-template-columns: 1fr; gap: 14px; }}
+        @media (min-width: 600px) {{ .review-grid {{ grid-template-columns: 1fr 1fr; }} }}
+        .review-item {{
+            background: #f8faff;
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid #e8f0fe;
+        }}
+        .review-item h4 {{ font-size: 17px; color: #1e40af; margin-bottom: 10px; }}
+        .review-item p {{ font-size: 15px; color: #475569; }}
+        /* TET 四指标网格（与 prompt 要求一致） */
+        .tet-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }}
+        @media (min-width: 600px) {{
+            .tet-grid {{ grid-template-columns: repeat(4, 1fr); }}
+        }}
+        .tet-card {{
+            background: #eff6ff;
+            border-radius: 16px;
+            padding: 20px 12px;
+            text-align: center;
+            border: 1px solid #dbeafe;
+        }}
+        .tet-emoji {{ font-size: 28px; margin-bottom: 6px; }}
+        .tet-value {{
+            font-family: 'Poppins', monospace;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }}
+        .tet-label {{
+            font-size: 13px;
+            color: #1e40af;
+            margin-top: 6px;
+            line-height: 1.4;
+        }}
+        .tet-label small {{ font-size: 11px; opacity: 0.7; }}
+        /* 风险框 */
+        .risk-box {{
+            background: #fef2f2;
+            border-left: 4px solid #ef4444;
+            border-radius: 12px;
+            padding: 18px 20px;
+            font-size: 15px;
+            color: #991b1b;
+            line-height: 1.8;
+        }}
+        /* 短期展望 */
+        .outlook-item {{ display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }}
+        .outlook-label {{ font-size: 16px; font-weight: 500; color: #334155; }}
+        .outlook-badge {{
+            display: inline-block;
+            font-size: 14px;
+            font-weight: 600;
+            padding: 2px 16px;
+            border-radius: 20px;
+        }}
+        .outlook-reason {{ font-size: 15px; color: #475569; }}
+        /* 多空分歧 */
+        .disagreement-grid {{ display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 14px; }}
+        @media (min-width: 600px) {{ .disagreement-grid {{ grid-template-columns: 1fr 1fr; }} }}
+        .disagreement-bullish, .disagreement-bearish {{
+            border-radius: 14px; padding: 18px; border: 1px solid #e2e8f0;
+        }}
+        .disagreement-bullish {{ background: #f0fdf4; }}
+        .disagreement-bearish {{ background: #fef2f2; }}
+        .disagreement-bullish h4, .disagreement-bearish h4,
+        .disagreement-consensus h4, .disagreement-key h4 {{
+            font-size: 15px; font-weight: 600; margin-bottom: 8px;
+        }}
+        .disagreement-consensus, .disagreement-key {{
+            border-radius: 12px; padding: 14px 18px; margin-top: 10px;
+            border: 1px solid #e2e8f0;
+        }}
+        .disagreement-consensus {{ background: #f8fafc; }}
+        .disagreement-key {{ background: #fffbeb; }}
+        /* 待办列表 */
+        .action-list {{ list-style: none; padding: 0; }}
+        .action-list li {{
+            position: relative;
+            padding: 12px 16px 12px 40px;
+            margin-bottom: 8px;
+            background: #f8fafc;
+            border-radius: 12px;
+            font-size: 15px;
+            color: #334155;
+            border: 1px solid #e2e8f0;
+        }}
+        .action-list li::before {{
+            content: "☑️";
+            position: absolute;
+            left: 12px;
+            top: 12px;
+            font-size: 16px;
+        }}
+        /* 金句 */
+        .golden-quote {{
+            font-family: 'Poppins', 'PingFang SC', sans-serif;
+            font-size: 20px;
+            text-align: center;
+            padding: 32px 24px;
+            color: #1e3c72;
+            font-weight: 600;
+            line-height: 1.6;
+            background: linear-gradient(135deg, #f0f4ff, #ffffff);
+            border-radius: 24px;
+            margin: 16px 0 32px;
+            border: 1px solid #dbeafe;
+        }}
+        /* 深度洞察 */
+        .insight-content {{ font-size: 16px; color: #334155; line-height: 1.8; white-space: pre-wrap; }}
+        /* 响应式 */
+        @media (max-width: 480px) {{
+            .hero {{ padding: 36px 16px; }}
+            .hero h1 {{ font-size: 26px; }}
+            .hero .summary {{ font-size: 17px; }}
+            .card {{ padding: 22px 16px; }}
+            .card h2 {{ font-size: 19px; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <div class="subtitle">牛逼股票 · {stock_code}</div>
+        <h1>🧠 {stock_name}</h1>
+        <div class="summary">{executive_summary}</div>
+    </div>
+
+    <div class="container">
+        {company_intro_html}
+        {insight_html}
+        {core_review_html}
+        {tet_html}
+        {risk_html}
+        {hype_html}
+        {outlook_html}
+        {disagreement_html}
+        {actions_html}
+        {quote_html}
+    </div>
+</body>
+</html>"""
+        return html
+
     def _generate_fallback_html(self, stock_code: str, stock_name: str, simplified_data: Dict[str, Any]) -> str:
         """生成备用HTML"""
         mapped_data = self._map_to_legacy_format(simplified_data)

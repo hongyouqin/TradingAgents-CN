@@ -1172,6 +1172,12 @@ class TradingAgentsGraph:
         decision = self.process_signal(final_state["final_trade_decision"], company_name)
         decision['model_info'] = model_info
 
+        # 从 state 中提取简化报告（由 Simplified Report 节点生成）
+        simplified_report = final_state.get("simplified_report")
+        if simplified_report:
+            decision['simplified_report'] = simplified_report
+            logger.info(f"✅ [propagate] 简化报告已集成到决策结果中: {company_name}")
+
         # Return decision and processed signal
         return final_state, decision
 
@@ -1238,6 +1244,8 @@ class TradingAgentsGraph:
                 'Safe Analyst': "🛡️ 保守风险评估",
                 'Neutral Analyst': "⚖️ 中性风险评估",
                 'Risk Judge': "🎯 风险经理",
+                # 简化报告节点
+                'Simplified Report': "🎨 生成老板版简化报告",
             }
 
             # 查找映射的消息
@@ -1481,6 +1489,7 @@ class TradingAgentsGraph:
             },
             "investment_plan": final_state["investment_plan"],
             "final_trade_decision": final_state["final_trade_decision"],
+            "simplified_report": final_state.get("simplified_report", {}),
         }
 
         # Save to file

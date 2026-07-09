@@ -156,6 +156,11 @@ class GraphSetup:
             self.deep_thinking_llm, self.risk_manager_memory
         )
 
+        # Create simplified report node (uses quick_thinking_llm)
+        simplified_report_node = create_simplified_report_node(
+            self.quick_thinking_llm
+        )
+
         # Create workflow
         workflow = StateGraph(AgentState)
 
@@ -176,6 +181,7 @@ class GraphSetup:
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Safe Analyst", safe_analyst)
         workflow.add_node("Risk Judge", risk_manager_node)
+        workflow.add_node("Simplified Report", simplified_report_node)
 
         # Define edges
         # Start with the first analyst
@@ -247,7 +253,9 @@ class GraphSetup:
             },
         )
 
-        workflow.add_edge("Risk Judge", END)
+        workflow.add_edge("Risk Judge", "Simplified Report")
+        workflow.add_edge("Simplified Report", END)
 
         # Compile and return
+        logger.info(f"✅ [Graph] 简化报告节点已加入图: Risk Judge → Simplified Report → END")
         return workflow.compile()

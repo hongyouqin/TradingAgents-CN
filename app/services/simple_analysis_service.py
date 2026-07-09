@@ -1022,36 +1022,85 @@ class SimpleAnalysisService:
             except Exception as save_error:
                 logger.error(f"❌ 保存原始分析结果失败: {task_id} - {save_error}", exc_info=True)
 
-            # 生成简化报告
+            # 生成简化报告（优先使用LangGraph节点生成的数据）
             try:
-                logger.info(f"🔄 开始生成简化报告: {task_id}")
+                logger.info(f"🔄 开始处理简化报告: {task_id}")
                 await self._update_progress_async(task_id, 90, "🎨 生成老板版简化报告")
-                
-                # 准备原始内容
-                original_content = {
-                    "symbol": stock_code,
-                    "stock_name": validation_result.stock_name,
-                    "summary": result.get("summary", ""),
-                    "recommendation": result.get("recommendation", ""),
-                    "confidence_score": result.get("confidence_score", 0.0),
-                    "risk_level": result.get("risk_level", "中等"),
-                    "key_points": result.get("key_points", []),
-                    "detailed_analysis": result.get("detailed_analysis", {}),
-                    "decision": result.get("decision", {}),
-                    "reports": result.get("reports", {}),
-                    "model_info": result.get("model_info", "Unknown"),
-                    "execution_time": result.get("execution_time", 0)
-                }
-                
-                # 生成简化报告
-                simplified_report = await self._generate_simplified_report_async(
-                    analysis_id=task_id,
-                    stock_code=stock_code,
-                    stock_name=validation_result.stock_name,
-                    mode_name= request.parameters.quick_analysis_model if request.parameters and request.parameters.quick_analysis_model else "deepseek-chat",
-                    original_content=original_content
-                )
-                
+
+                # 检查 LangGraph 节点是否已生成简化报告
+                graph_simplified = result.get("decision", {}).get("simplified_report")
+
+                if graph_simplified:
+                    # === 图节点已生成：直接使用 ===
+                    logger.info(f"✅ 使用LangGraph节点生成的简化报告: {task_id}")
+                    from app.services.report_simplifier import (
+                        SimplifiedReport,
+                        get_report_simplifier,
+                    )
+
+                    simplifier = get_report_simplifier()
+
+                    # 优先使用 LangGraph 节点中已通过 LLM 生成的 html_content
+                    html_content = graph_simplified.get("html_content", "")
+                    if not html_content:
+                        # 如果 LLM 生成 HTML 失败，回退到 Python 模板渲染
+                        logger.warning(f"⚠️ LangGraph节点未生成html_content，回退到模板渲染: {task_id}")
+                        html_content = simplifier._generate_html(
+                            stock_code=graph_simplified.get("stock_code", stock_code),
+                            stock_name=graph_simplified.get("stock_name", validation_result.stock_name),
+                            simplified_data=graph_simplified,
+                        )
+
+                    # 组装 SimplifiedReport 对象
+                    simplified_report = SimplifiedReport(
+                        analysis_id=task_id,
+                        original_summary=result.get("summary", ""),
+                        executive_summary=graph_simplified.get("executive_summary", ""),
+                        decision_points=graph_simplified.get("action_items", []),
+                        core_review=graph_simplified.get("core_review", {}),
+                        risk_analysis={
+                            "risk": graph_simplified.get("personal_view_and_risk", ""),
+                            "strategy": "建议结合个人风险承受能力制定策略",
+                        },
+                        short_term_outlook=graph_simplified.get("short_term_outlook", {}),
+                        action_items=graph_simplified.get("action_items", []),
+                        golden_quote=graph_simplified.get("golden_quote", "谋定而后动，知止而有得"),
+                        html_content=html_content,
+                        compression_ratio=graph_simplified.get("compression_ratio", 0.0),
+                        stock_code=graph_simplified.get("stock_code", stock_code),
+                        stock_name=graph_simplified.get("stock_name", validation_result.stock_name),
+                        llm_raw_response="由 LangGraph Simplified Report 节点生成",
+                    )
+
+                    # 保存到数据库
+                    await simplifier._save_simplified_report_to_db(simplified_report)
+                    logger.info(f"✅ LangGraph节点生成的简化报告已保存到数据库: {task_id}")
+                else:
+                    # === 图节点未生成（兼容旧流程）：走原有逻辑 ===
+                    logger.info(f"🔄 图节点未生成简化报告，走原有ReportSimplifier流程: {task_id}")
+                    original_content = {
+                        "symbol": stock_code,
+                        "stock_name": validation_result.stock_name,
+                        "summary": result.get("summary", ""),
+                        "recommendation": result.get("recommendation", ""),
+                        "confidence_score": result.get("confidence_score", 0.0),
+                        "risk_level": result.get("risk_level", "中等"),
+                        "key_points": result.get("key_points", []),
+                        "detailed_analysis": result.get("detailed_analysis", {}),
+                        "decision": result.get("decision", {}),
+                        "reports": result.get("reports", {}),
+                        "model_info": result.get("model_info", "Unknown"),
+                        "execution_time": result.get("execution_time", 0),
+                    }
+
+                    simplified_report = await self._generate_simplified_report_async(
+                        analysis_id=task_id,
+                        stock_code=stock_code,
+                        stock_name=validation_result.stock_name,
+                        mode_name=request.parameters.quick_analysis_model if request.parameters and request.parameters.quick_analysis_model else "deepseek-chat",
+                        original_content=original_content,
+                    )
+
                 # 将简化报告添加到结果中
                 result["simplified_report"] = {
                     "executive_summary": simplified_report.executive_summary,
@@ -1062,13 +1111,13 @@ class SimpleAnalysisService:
                     "action_items": simplified_report.action_items,
                     "golden_quote": simplified_report.golden_quote,
                     "html_content": simplified_report.html_content,
-                    "compression_ratio": simplified_report.compression_ratio
+                    "compression_ratio": simplified_report.compression_ratio,
                 }
-                
-                logger.info(f"✅ 简化报告生成完成: {task_id}")
-                
+
+                logger.info(f"✅ 简化报告处理完成: {task_id}")
+
             except Exception as simplify_err:
-                logger.error(f"❌ 生成简化报告失败: {simplify_err}", exc_info=True)
+                logger.error(f"❌ 处理简化报告失败: {simplify_err}", exc_info=True)
                 result["simplified_report_error"] = str(simplify_err)
 
             # 更新最终状态
@@ -1599,8 +1648,10 @@ class SimpleAnalysisService:
                 "🛡️ 保守风险评估": 85.5,    # 78% + 7.5%
                 "⚖️ 中性风险评估": 89.25,   # 78% + 11.25%
                 "🎯 风险经理": 93,           # 78% + 15%
+                # 简化报告阶段 (93% → 100%)
+                "🎨 生成老板版简化报告": 97, # 93% + 4%
                 # 最终阶段 (93% → 100%)
-                "📊 生成报告": 97,           # 93% + 4%
+                "📊 生成报告": 99,           # 93% + 6%
             }
 
             def graph_progress_callback(message: str):
@@ -1902,10 +1953,12 @@ class SimpleAnalysisService:
                         'confidence': decision.get('confidence', 0.5),
                         'risk_score': decision.get('risk_score', 0.3),
                         'target_price': target_price,
-                        'reasoning': decision.get('reasoning', '暂无分析推理')
+                        'reasoning': decision.get('reasoning', '暂无分析推理'),
+                        # 传递 LangGraph Simplified Report 节点生成的简化报告数据
+                        'simplified_report': decision.get('simplified_report'),
                     }
 
-                    logger.info(f"🎯 [DEBUG] 格式化后的decision: {formatted_decision}")
+                    logger.info(f"🎯 [DEBUG] 格式化后的decision: action={chinese_action}, has_simplified_report={bool(decision.get('simplified_report'))}")
                 else:
                     # 处理其他类型
                     formatted_decision = {

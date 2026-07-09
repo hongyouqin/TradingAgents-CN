@@ -1574,6 +1574,12 @@ def get_china_stock_data_unified(
     # 使用 end_date 作为目标日期，向前回溯指定天数
     start_date, end_date = get_trading_date_range(end_date, lookback_days=lookback_days)
 
+    # 🔧 修复：当用户/LLM 显式传入了更早的开始日期时，取更宽的范围
+    # 不要截断用户明确请求的数据范围（如市场分析师的 5 年数据请求）
+    if original_start_date and original_start_date < start_date:
+        logger.info(f"📅 [智能日期] 用户显式传入了更早的开始日期 {original_start_date}，采用该范围")
+        start_date = original_start_date
+
     logger.info(f"📅 [智能日期] ===== 日期范围计算结果 =====")
     logger.info(f"📅 [智能日期] 原始输入: {original_start_date} 至 {original_end_date}")
     logger.info(f"📅 [智能日期] 回溯天数: {lookback_days}天")

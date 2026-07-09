@@ -30,7 +30,11 @@ class ATrendEmotionTiming:
             'close': 'close_hs300'
         }, inplace=True)
         
-        df = pd.merge(stock_df, hs300_df, on="date", how="inner")
+        df = pd.merge(stock_df, hs300_df, on="date", how="left")
+        # 🔧 修复：使用 left join 代替 inner join
+        # inner join 会在 HS300 数据缺失最新日期时丢弃涨停日整行数据
+        # 导致 TET 指标算的是涨停前的旧数据，情绪/趋势全部偏低
+        # left join 保证股票数据完整，HS300 缺失时 ratio_hs 为 NaN 后续用 0 填充
         df["ratio_hs"] = df["close_stock"] / df["close_hs300"]
         self.data = df
         return self
@@ -42,7 +46,7 @@ class ATrendEmotionTiming:
 
         # ROC 信号
         for p in [15, 20, 25, 30, 40, 50, 60, 80, 120, 150]:
-            roc = pd.Series(close).pct_change(periods=p).values * 100
+            roc = pd.Series(close).pct_change(periods=p, fill_method=None).fillna(0).values * 100
             signals.append(np.where(roc>0.5,1,np.where(roc<-0.5,-1,0)))
 
         # SMA 信号
@@ -59,7 +63,18 @@ class ATrendEmotionTiming:
 
         df["trend"] = np.array(signals).mean(axis=0)
         df["trend_hs"] = np.sign(df["ratio_hs"].pct_change(20).fillna(0))
-        df["trend_score"] = np.where(np.sign(df["trend"])==np.sign(df["trend_hs"]), df["trend"], 0)
+        # 🔧 修复：沪深300横盘（trend_hs==0）时不应清零个股趋势
+        # 原逻辑：np.sign(trend)==np.sign(trend_hs) → 当趋势_hs=0时几乎永不成立
+        # 导致个股明明走强，趋势得分却被错误清零
+        df["trend_score"] = np.where(
+            df["trend_hs"] == 0,                    # 基准横盘 → 直接用自身趋势
+            df["trend"],
+            np.where(
+                np.sign(df["trend"]) == df["trend_hs"],  # 方向一致 → 保留
+                df["trend"],
+                0                                      # 方向不一致 → 清零
+            )
+        )
         self.data = df
         return self
 
@@ -73,13 +88,16 @@ class ATrendEmotionTiming:
         for p in [3, 5, 7, 9, 11, 14]:
             # 整根数组对齐，不出现长度错位
             rsi = np.zeros(n_rows)
-            delta = np.diff(close)
-            if len(delta) < 1:
+            # 🔧 修复：用百分比收益率代替绝对价格变化，避免价格尺度依赖
+            # 原始问题：delta = np.diff(close) 会导致10元股票涨停涨1元，100元股票涨停涨10元
+            # RSI结果被股票绝对价格水平扭曲，对低价股严重偏低
+            returns = np.diff(close) / close[:-1] * 100  # 百分比收益率
+            if len(returns) < 1:
                 emotions.append(rsi)
                 continue
 
-            gain = np.maximum(delta, 0)
-            loss = -np.minimum(delta, 0)
+            gain = np.maximum(returns, 0)
+            loss = -np.minimum(returns, 0)
             avg_gain = pd.Series(gain).rolling(window=p, min_periods=1).mean().values
             avg_loss = pd.Series(loss).rolling(window=p, min_periods=1).mean().values
             rs = avg_gain / (avg_loss + 1e-8)

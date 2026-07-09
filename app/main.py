@@ -687,9 +687,6 @@ async def lifespan(app: FastAPI):
         # ==================== 数据概览定时同步 ====================
         from app.services.data_overview_service import (
             run_data_overview_sync as _run_overview_sync,
-            run_stock_hot_sync as _run_hot_sync,
-            run_stock_hot_deal_sync as _run_deal_sync,
-            run_stock_hot_rank_em_sync as _run_rank_sync,
         )
         logger.info("📊 配置数据概览定时同步任务（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）...")
         # 工作日每天 08:30 开盘前执行一次（聚合任务）
