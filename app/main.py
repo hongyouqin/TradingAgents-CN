@@ -690,13 +690,21 @@ async def lifespan(app: FastAPI):
         )
         logger.info("📊 配置数据概览定时同步任务（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）...")
         # 工作日每天 08:30 开盘前执行一次（聚合任务）
+        # 8:30执行
         scheduler.add_job(
             _run_overview_sync,
-            CronTrigger.from_crontab("30 8 * * 0-5", timezone=settings.TIMEZONE),
-            id="data_overview_sync",
-            name="数据概览同步（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）",
+            CronTrigger.from_crontab("30 8 * * 1-5", timezone=settings.TIMEZONE),
+            id="data_overview_sync_0830",
+            name="数据概览同步‑08:30（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）",
         )
-        logger.info(f"📊 数据概览同步已配置: 工作日 08:30 ({settings.TIMEZONE})")
+        # 15:00执行
+        scheduler.add_job(
+            _run_overview_sync,
+            CronTrigger.from_crontab("0 15 * * 1-5", timezone=settings.TIMEZONE),
+            id="data_overview_sync_1500",
+            name="数据概览同步‑15:00（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）",
+        )
+        logger.info(f"📊 数据概览同步已配置: 工作日 08:30, 15:00 ({settings.TIMEZONE})")
         scheduler.start()
         
         # 启动补偿算力账户消费冻结服务
