@@ -1169,11 +1169,22 @@ class TradingAgentsGraph:
             model_info = "Unknown"
 
         # 处理决策并添加模型信息
-        decision = self.process_signal(final_state["final_trade_decision"], company_name)
+        # 🔥 重构：将 simplified_report / market_report / sentiment_report 一并传入
+        # 让 SignalProcessor 直接用 TET 指标和结构化数据计算，不再调用 LLM
+        simplified_report = final_state.get("simplified_report")
+        market_report = final_state.get("market_report", "")
+        sentiment_report = final_state.get("sentiment_report", "")
+
+        decision = self.process_signal(
+            final_state["final_trade_decision"],
+            company_name,
+            simplified_report=simplified_report,
+            market_report=market_report,
+            sentiment_report=sentiment_report,
+            trade_date=final_state.get("trade_date"),
+        )
         decision['model_info'] = model_info
 
-        # 从 state 中提取简化报告（由 Simplified Report 节点生成）
-        simplified_report = final_state.get("simplified_report")
         if simplified_report:
             decision['simplified_report'] = simplified_report
             logger.info(f"✅ [propagate] 简化报告已集成到决策结果中: {company_name}")
@@ -1520,6 +1531,14 @@ class TradingAgentsGraph:
             self.curr_state, returns_losses, self.risk_manager_memory
         )
 
-    def process_signal(self, full_signal, stock_symbol=None):
-        """Process a signal to extract the core decision."""
-        return self.signal_processor.process_signal(full_signal, stock_symbol)
+    def process_signal(self, full_signal, stock_symbol=None,
+                       simplified_report=None, market_report=None,
+                       sentiment_report=None, trade_date=None):
+        """Process a signal to extract the core decision (data-driven, no LLM)."""
+        return self.signal_processor.process_signal(
+            full_signal, stock_symbol,
+            simplified_report=simplified_report,
+            market_report=market_report,
+            sentiment_report=sentiment_report,
+            trade_date=trade_date,
+        )
