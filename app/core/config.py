@@ -343,8 +343,8 @@ class Settings(BaseSettings):
     # ==================== 分析师数据获取配置 ====================
 
     # 市场分析师数据范围配置
-    # 默认365天：TET 指标中 ROC/SMA 最长周期为150个交易日，需约250+个交易日（≈365自然日）数据
-    MARKET_ANALYST_LOOKBACK_DAYS: int = Field(default=365, ge=5, le=365, description="市场分析回溯天数（用于技术分析）")
+    # 默认1825天（5年）：TET 指标需要足够的历史数据计算趋势，5年≈1250个交易日为充足数据标准
+    MARKET_ANALYST_LOOKBACK_DAYS: int = Field(default=1825, ge=5, le=1825, description="市场分析回溯天数（用于技术分析，默认5年）")
 
     # ==================== BaoStock统一数据同步配置 ====================
 

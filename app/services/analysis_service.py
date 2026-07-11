@@ -194,10 +194,15 @@ class AnalysisService:
 
             model_info = decision.get('model_info', 'Unknown') if isinstance(decision, dict) else 'Unknown'
 
+            # 从 create_simplified_report_node 输出的简化报告中提取摘要和推荐内容
+            simplified_report = decision.get("simplified_report", {}) or {}
+            summary_text = simplified_report.get("executive_summary", "") or decision.get("summary", "")
+            recommendation_text = simplified_report.get("insight_and_decision", "") or decision.get("recommendation", "")
+
             result = AnalysisResult(
                 analysis_id=str(uuid.uuid4()),
-                summary=decision.get("summary", ""),
-                recommendation=decision.get("recommendation", ""),
+                summary=summary_text,
+                recommendation=recommendation_text,
                 confidence_score=decision.get("confidence_score", 0.0),
                 risk_level=decision.get("risk_level", "中等"),
                 key_points=decision.get("key_points", []),
@@ -485,10 +490,15 @@ class AnalysisService:
 
             model_info = decision.get('model_info', 'Unknown') if isinstance(decision, dict) else 'Unknown'
 
+            # 从 create_simplified_report_node 输出的简化报告中提取摘要和推荐内容
+            simplified_report = decision.get("simplified_report", {}) or {}
+            summary_text = simplified_report.get("executive_summary", "") or decision.get("summary", "")
+            recommendation_text = simplified_report.get("insight_and_decision", "") or decision.get("recommendation", "")
+
             result = AnalysisResult(
                 analysis_id=str(uuid.uuid4()),
-                summary=decision.get("summary", ""),
-                recommendation=decision.get("recommendation", ""),
+                summary=summary_text,
+                recommendation=recommendation_text,
                 confidence_score=decision.get("confidence_score", 0.0),
                 risk_level=decision.get("risk_level", "中等"),
                 key_points=decision.get("key_points", []),

@@ -235,6 +235,81 @@ async def get_reports_list(
         logger.error(f"❌ 获取报告列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/latest-pitch")
+async def get_latest_pitch(
+    limit: int = Query(50, ge=1, le=200, description="返回条数"),
+    days_back: int = Query(7, ge=1, le=30, description="回溯天数"),
+    sort_desc: bool = Query(True, description="True=降序(强势股优先), False=升序(弱势股优先)"),
+):
+    """获取最新股票排序，按 anchored_trend_score 降序排列
+
+    从 analysis_tasks 中获取最近完成的股票分析，
+    按 anchored_trend_score（锚定趋势得分）排序。
+    """
+    try:
+        logger.info(f"📊 [LatestPitch] 获取最新股票排序, limit={limit}, days_back={days_back}")
+        db = get_mongo_db()
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.utcnow() - timedelta(days=days_back)
+
+        cursor = db.analysis_tasks.find(
+            {
+                "status": "completed",
+                "completed_at": {"$gte": cutoff},
+                "result.detailed_analysis": {"$exists": True},
+            },
+            {
+                "task_id": 1,
+                "stock_symbol": 1,
+                "stock_code": 1,
+                "result.summary": 1,
+                "result.recommendation": 1,
+                "result.detailed_analysis.target_price": 1,
+                "result.detailed_analysis.price_range": 1,
+                "result.detailed_analysis.simplified_report.tet_indicators": 1,
+                "result.detailed_analysis.simplified_report.executive_summary": 1,
+                "completed_at": 1,
+                "_id": 0,
+            }
+        ).sort("completed_at", -1).limit(500)
+
+        items = []
+        async for doc in cursor:
+            result = doc.get("result", {}) or {}
+            da = result.get("detailed_analysis", {}) or {}
+            sr = da.get("simplified_report", {}) or {}
+            tet = sr.get("tet_indicators", {}) or {}
+
+            anchored = tet.get("anchored_trend_score")
+            if anchored is None:
+                continue
+
+            items.append({
+                "task_id": doc.get("task_id", ""),
+                "stock_symbol": doc.get("stock_symbol") or doc.get("stock_code", ""),
+                "summary": (result.get("summary") or sr.get("executive_summary") or "")[:120],
+                "target_price": da.get("target_price"),
+                "tet_indicators": {
+                    "anchored_trend_score": anchored,
+                    "trend_score": tet.get("trend_score"),
+                    "emotion_index": tet.get("emotion_index"),
+                    "timing_indicator": tet.get("timing_indicator"),
+                },
+                "analysis_date": doc.get("completed_at").strftime("%Y-%m-%d") if doc.get("completed_at") else "",
+            })
+
+        items.sort(key=lambda x: x["tet_indicators"]["anchored_trend_score"] or 0, reverse=sort_desc)
+        items = items[:limit]
+
+        logger.info(f"✅ [LatestPitch] 返回 {len(items)} 条记录")
+        return {"success": True, "data": {"stocks": items, "total": len(items)}, "message": "获取成功"}
+
+    except Exception as e:
+        logger.error(f"❌ [LatestPitch] 获取失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{report_id}/detail")
 async def get_report_detail(
     report_id: str,

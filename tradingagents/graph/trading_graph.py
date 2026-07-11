@@ -634,12 +634,12 @@ class TradingAgentsGraph:
 
             # 读取快速模型参数c
             quick_max_tokens = quick_config.get("max_tokens", 4000)
-            quick_temperature = quick_config.get("temperature", 0.7)
+            quick_temperature = quick_config.get("temperature", 0.4)
             quick_timeout = quick_config.get("timeout", 180)
 
             # 读取深度模型参数
             deep_max_tokens = deep_config.get("max_tokens", 4000)
-            deep_temperature = deep_config.get("temperature", 0.7)
+            deep_temperature = deep_config.get("temperature", 0.4)
             deep_timeout = deep_config.get("timeout", 180)
 
             logger.info(f"🔧 [DeepSeek-快速模型] max_tokens={quick_max_tokens}, temperature={quick_temperature}, timeout={quick_timeout}s")
@@ -1176,7 +1176,6 @@ class TradingAgentsGraph:
         sentiment_report = final_state.get("sentiment_report", "")
 
         decision = self.process_signal(
-            final_state["final_trade_decision"],
             company_name,
             simplified_report=simplified_report,
             market_report=market_report,
@@ -1531,12 +1530,12 @@ class TradingAgentsGraph:
             self.curr_state, returns_losses, self.risk_manager_memory
         )
 
-    def process_signal(self, full_signal, stock_symbol=None,
+    def process_signal(self, stock_symbol=None,
                        simplified_report=None, market_report=None,
                        sentiment_report=None, trade_date=None):
         """Process a signal to extract the core decision (data-driven, no LLM)."""
         return self.signal_processor.process_signal(
-            full_signal, stock_symbol,
+            stock_symbol,
             simplified_report=simplified_report,
             market_report=market_report,
             sentiment_report=sentiment_report,

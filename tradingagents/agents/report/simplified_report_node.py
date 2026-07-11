@@ -75,6 +75,12 @@ SIMPLIFY_PROMPT_TEMPLATE = """你是一个专业的投资顾问"牛逼股票"，
     - key_disagreement: 核心分歧
 - action_items: 3条待办
 - golden_quote: 金句
+- valuation_metrics: （估值指标，从基本面报表数据计算，若数据不足则填null）
+    - ps_ratio: 市销率 (PS, TTM)
+    - pe_ratio: 市盈率 (PE, TTM)
+    - pb_ratio: 市净率 (PB)
+    - net_margin: 净利率 (%)
+    - revenue_growth: 营收增长率 (%)
 
 确保返回有效JSON，无任何多余文字。"""
 
@@ -142,8 +148,8 @@ def create_simplified_report_node(llm):
         company_name = state.get("company_of_interest", "未知")
         logger.info(f"📋 [Simplified Report] 开始为 {company_name} 生成简化报告")
 
-        # 1. 收集所有分析报告、决策 和 TET 指标
-        original_content, tet_indicators = _collect_reports(state)
+        # 1. 收集所有分析报告、决策、TET 指标 和 数据质量信息
+        original_content, tet_indicators, data_quality = _collect_reports(state)
 
         # 2. 构建 prompt
         prompt = SIMPLIFY_PROMPT_TEMPLATE.format(
@@ -185,6 +191,10 @@ def create_simplified_report_node(llm):
             "golden_quote": simplified_data.get("golden_quote", "谋定而后动，知止而有得"),
             # TET 原始数值（从 market_report 解析，非 LLM 重新解释）
             "tet_indicators": tet_indicators if tet_indicators else simplified_data.get("tet_indicators", {}),
+            # 数据质量信息（从原始工具输出提取，非 LLM 生成）
+            "data_quality": data_quality if data_quality else {},
+            # 估值指标（LLM 从基本面数据提取）
+            "valuation_metrics": simplified_data.get("valuation_metrics", {}) if isinstance(simplified_data.get("valuation_metrics"), dict) else {},
         }
 
         # 7. 使用 _html_generation_prompt 通过 LLM 生成 HTML（保持与线上一致的风格）
@@ -206,7 +216,7 @@ def _collect_reports(state: dict):
     """从 state 中收集所有分析报告和 TET 指标数值
 
     Returns:
-        (content_dict, tet_indicators_dict)
+        (content_dict, tet_indicators_dict, data_quality_dict)
     """
     stock_code = state.get("company_of_interest", "未知")
     # 尝试获取股票名称（company_of_interest 实际是股票代码，不是公司名）
@@ -292,7 +302,12 @@ def _collect_reports(state: dict):
         if tet_indicators:
             logger.info(f"📊 [TET] 从 messages 工具输出提取到: {tet_indicators}")
 
-    return content, tet_indicators
+    # --- 从 messages 中的工具输出提取数据质量信息（数据条数、数据期间）---
+    data_quality = _extract_data_quality_from_messages(state)
+    if data_quality:
+        logger.info(f"📊 [数据质量] 从 messages 工具输出提取到: {data_quality}")
+
+    return content, tet_indicators, data_quality
 
 
 def _extract_tet_from_messages(state: dict) -> dict:
@@ -341,6 +356,55 @@ def _extract_tet_from_messages(state: dict) -> dict:
             break  # 全部提取到就提前退出
 
     return tet_indicators
+
+
+def _extract_data_quality_from_messages(state: dict) -> dict:
+    """从 state 的 messages 中查找工具输出，提取数据质量信息（数据期间、数据条数）
+
+    _format_stock_data_response 输出的原始数据包含：
+      数据期间: START_DATE 至 END_DATE
+      数据条数: XXX条
+
+    但市场分析师 LLM 在生成 market_report 时可能丢弃这些信息，
+    因此直接从原始 ToolMessage 中提取最可靠。
+    """
+    data_quality = {}
+    messages = state.get("messages", [])
+    if not messages:
+        return data_quality
+
+    for msg in messages:
+        content = ""
+        if hasattr(msg, "content"):
+            content = msg.content or ""
+        elif isinstance(msg, dict):
+            content = msg.get("content", "") or ""
+
+        if not isinstance(content, str) or len(content) < 50:
+            continue
+
+        # 检查是否包含数据期间信息
+        if "数据期间" not in content and "数据区间" not in content and "数据条数" not in content:
+            continue
+
+        # 提取数据期间/区间: START 至 END（兼容全角/半角冒号）
+        period_match = re.search(
+            r"数据(?:期间|区间)\s*[:\uff1a]\s*(\d{4}-\d{2}-\d{2})\s*至\s*(\d{4}-\d{2}-\d{2})",
+            content,
+        )
+        if period_match:
+            data_quality["data_start"] = period_match.group(1)
+            data_quality["data_end"] = period_match.group(2)
+
+        # 提取数据条数: XXX条
+        row_match = re.search(r"数据条数:\s*(\d+)\s*条", content)
+        if row_match:
+            data_quality["rows"] = int(row_match.group(1))
+
+        if len(data_quality) >= 3:
+            break  # 三个字段都提取到就退出
+
+    return data_quality
 
 
 def _resolve_stock_name(stock_code: str) -> str:

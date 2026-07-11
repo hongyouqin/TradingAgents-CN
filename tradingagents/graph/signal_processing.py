@@ -43,7 +43,6 @@ class SignalProcessor:
     @log_graph_module("signal_processing")
     def process_signal(
         self,
-        full_signal: str,
         stock_symbol: str = None,
         simplified_report: dict = None,
         market_report: str = None,
@@ -52,8 +51,10 @@ class SignalProcessor:
     ) -> dict:
         """处理交易信号，生成结构化决策信息。
 
+        不再提取 buy/sell/hold 投资建议（由简化报告中的 insight_and_decision 承载）。
+        仅计算 confidence / risk_score / target_price 等量化指标。
+
         Args:
-            full_signal: final_trade_decision 文本（备用来源）
             stock_symbol: 股票代码
             simplified_report: Simplified Report 节点输出的结构化 JSON
             market_report: 市场分析报告文本（含 TET 数值）
@@ -61,7 +62,7 @@ class SignalProcessor:
             trade_date: 分析日期 (YYYY-MM-DD)，用于数据新鲜度验证
 
         Returns:
-            dict: 包含 action / target_price / confidence / risk_score / reasoning 的决策字典
+            dict: 包含 target_price / confidence / risk_score / reasoning 的决策字典
         """
         # ---- 1. 提取 TET 指标 ----
         tet = self._extract_tet(simplified_report, market_report)
@@ -82,8 +83,8 @@ class SignalProcessor:
             },
         )
 
-        # ---- 2. 提取数据质量信息 ----
-        data_quality = self._extract_data_quality(market_report, trade_date)
+        # ---- 2. 提取数据质量信息（优先从 simplified_report 的数据质量字段获取）----
+        data_quality = self._extract_data_quality(market_report, trade_date, simplified_report)
         data_sufficiency = data_quality["sufficiency"]
         data_freshness = data_quality["freshness"]
         data_rows = data_quality["rows"]
@@ -96,27 +97,22 @@ class SignalProcessor:
         bollinger = self._extract_bollinger(market_report)
         current_price = self._extract_current_price(market_report) or bollinger.get("current_price")
 
-        # ---- 4. 计算 action（优先从 simplified_report 解析） ----
-        action = self._compute_action(
-            simplified_report, timing_indicator, trend_score, full_signal,
-        )
-        logger.info(f"🎯 [SignalProcessor] 决策动作: {action}")
-
-        # ---- 5. 计算 target_price（优先用布林带，再试 insight 中的价格，最后 TET 推算） ----
-        target_price = self._compute_target_price(
-            simplified_report, action, current_price, trend_score, bollinger,
+        # ---- 4. 计算 target_price（MA20+MA60 中点 + 布林带价格区间）----
+        target_price, price_range = self._compute_target_price(
+            simplified_report, current_price, bollinger,
         )
         logger.info(
             f"💰 [SignalProcessor] 目标价: {target_price} (当前价: {current_price})"
+            f"{' 区间: ' + str(price_range) if price_range else ''}"
         )
 
-        # ---- 6. 验证 TET 计算正确性 ----
+        # ---- 5. 验证 TET 计算正确性 ----
         tet_correctness = self._verify_tet_correctness(
             tet, trend_score, emotion_index, timing_indicator, anchored_trend,
             simplified_report, market_report,
         )
 
-        # ---- 7. 计算 confidence（三维度：数据充足 + 数据新鲜 + TET正确）----
+        # ---- 6. 计算 confidence（三维度：数据充足 + 数据新鲜 + TET正确）----
         confidence = self._compute_confidence(
             data_sufficiency=data_sufficiency,
             data_freshness=data_freshness,
@@ -124,36 +120,33 @@ class SignalProcessor:
         )
         logger.info(f"📈 [SignalProcessor] 置信度: {confidence:.3f}")
 
-        # ---- 8. 计算 risk_score ----
+        # ---- 7. 计算 risk_score ----
         risk_score = self._compute_risk_score(
             simplified_report, trend_score, emotion_index, anchored_trend, confidence,
         )
         logger.info(f"⚠️  [SignalProcessor] 风险评分: {risk_score:.3f}")
 
-        # ---- 9. 获取 reasoning ----
+        # ---- 8. 获取 reasoning（基于简化报告，无 action 信息）----
         reasoning = self._build_reasoning(
-            simplified_report, tet, action, current_price, target_price,
+            simplified_report, tet, current_price, target_price,
             confidence, risk_score, data_quality,
         )
 
-        # ---- 7. 获取 reasoning ----
-        reasoning = self._build_reasoning(
-            simplified_report, tet, action, current_price, target_price,
-            confidence, risk_score, data_quality,
-        )
+        logger.info(f"📈 [SignalProcessor] 数据足够度: {data_sufficiency:.3f}")
+        logger.info(f"📈 [SignalProcessor] 数据新鲜度: {data_freshness:.3f}")
+        logger.info(f"📈 [SignalProcessor] TET正确性: {tet_correctness:.3f}")
 
         result = {
-            "action": action,
             "target_price": target_price,
+            "price_range": price_range,
             "confidence": round(confidence, 4),
             "risk_score": round(risk_score, 4),
             "reasoning": reasoning,
         }
         logger.info(
-            f"✅ [SignalProcessor] 处理完成: action={action}, target_price={target_price}, "
+            f"✅ [SignalProcessor] 处理完成: target_price={target_price}, "
             f"confidence={confidence:.2f}, risk_score={risk_score:.2f}",
             extra={
-                "action": action,
                 "target_price": target_price,
                 "confidence": confidence,
                 "stock_symbol": stock_symbol,
@@ -165,13 +158,12 @@ class SignalProcessor:
     # 数据质量提取
     # ------------------------------------------------------------------
 
-    def _extract_data_quality(self, market_report: str, trade_date: str = None) -> dict:
-        """从 market_report 中提取数据质量指标。
+    def _extract_data_quality(self, market_report: str, trade_date: str = None,
+                               simplified_report: dict = None) -> dict:
+        """提取数据质量指标。
 
-        market_report 格式参见 data_source_manager.py:733-735：
-          "数据期间: 2024-01-01 至 2026-07-10"
-          "数据条数: 1200条 (展示最近5个交易日)"
-          "💰 最新价格: ¥XX.XX"
+        优先从 simplified_report 的 data_quality 字段获取（该字段源自原始 ToolMessage，
+        不受 LLM 重新格式化影响），再回退到从 market_report 文本中正则提取。
 
         Returns:
             dict: {"sufficiency": 0-1, "freshness": 0-1, "rows": int,
@@ -182,12 +174,48 @@ class SignalProcessor:
         data_end = None
         years_span = 0.0
 
+        # ---- 优先从 simplified_report 的 data_quality 字段获取 ----
+        if simplified_report and isinstance(simplified_report, dict):
+            dq = simplified_report.get("data_quality", {}) or {}
+            if dq.get("rows") is not None:
+                rows = int(dq["rows"])
+                data_start = dq.get("data_start")
+                data_end = dq.get("data_end")
+                logger.info(f"📊 [数据质量] 从 simplified_report.data_quality 获取: "
+                           f"rows={rows}, {data_start}~{data_end}")
+                if data_start and data_end:
+                    try:
+                        from datetime import datetime
+                        s = datetime.strptime(data_start, "%Y-%m-%d")
+                        e = datetime.strptime(data_end, "%Y-%m-%d")
+                        years_span = (e - s).days / 365.0
+                    except ValueError:
+                        pass
+                # 直接计算质量评分
+                return self._calc_data_quality_scores(
+                    rows, data_start, data_end, years_span, trade_date
+                )
+
+        # ---- 回退：从 market_report 文本中正则提取 ----
         if market_report and isinstance(market_report, str):
-            # 解析 "数据期间: START 至 END"
+            # 解析 "数据期间/数据区间/数据范围: START 至 END"
+            # LLM 可能改写为 "数据区间:" 而非原始 "数据期间:"
             period_match = re.search(
-                r"数据期间:\s*(\d{4}-\d{2}-\d{2})\s*至\s*(\d{4}-\d{2}-\d{2})",
+                r"数据(?:期间|区间|范围)\s*[:\uff1a]\s*(\d{4}-\d{2}-\d{2})\s*至\s*(\d{4}-\d{2}-\d{2})",
                 market_report,
             )
+            if not period_match:
+                # 也尝试 "分析日期/交易日期" + "数据范围" 等混合格式
+                period_match = re.search(
+                    r"(?:分析日期|交易日期)[^0-9]*(\d{4}-\d{2}-\d{2}).*?"
+                    r"数据(?:期间|区间|范围)[^0-9]*[:\uff1a]\s*(\d{4}-\d{2}-\d{2})\s*至\s*(\d{4}-\d{2}-\d{2})",
+                    market_report, re.DOTALL,
+                )
+                if period_match:
+                    data_start = period_match.group(2)
+                    data_end = period_match.group(3)
+                else:
+                    period_match = None
             if period_match:
                 data_start = period_match.group(1)
                 data_end = period_match.group(2)
@@ -200,14 +228,29 @@ class SignalProcessor:
                 except ValueError:
                     pass
 
-            # 解析 "数据条数: XXX条"
+            # 解析 "数据条数: XXX条"（LLM 可能丢弃此行）
             row_match = re.search(r"数据条数:\s*(\d+)\s*条", market_report)
             if row_match:
                 rows = int(row_match.group(1))
 
+        # 如果提取到了日期范围但 rows=0，用 years_span 估算行数（约250交易日/年）
+        if rows == 0 and years_span > 0:
+            estimated_rows = int(years_span * 250)
+            logger.info(f"📊 [数据质量] 无显式数据条数，从{years_span:.1f}年估算: {estimated_rows}行")
+            rows = estimated_rows
+
+        return self._calc_data_quality_scores(
+            rows, data_start, data_end, years_span, trade_date
+        )
+
+    # ------------------------------------------------------------------
+    # 数据质量评分计算（提取与计算分离，复用）
+    # ------------------------------------------------------------------
+
+    def _calc_data_quality_scores(self, rows: int, data_start: str, data_end: str,
+                                   years_span: float, trade_date: str = None) -> dict:
+        """根据原始数据质量指标计算充足度、新鲜度评分。"""
         # ---- 数据充足度评分 ----
-        # 5年 ≈ 1250个交易日
-        # 评分曲线：0行→0.1, 250行→0.3, 500行→0.5, 1250行→1.0
         if rows >= 1250:
             sufficiency = 1.0
         elif rows >= 500:
@@ -217,14 +260,11 @@ class SignalProcessor:
         elif rows > 0:
             sufficiency = 0.1 + 0.2 * rows / 250
         elif years_span >= 5.0:
-            # 无行数但日期范围超过5年
             sufficiency = 0.8
         else:
-            sufficiency = 0.3  # 无法确定时保守给0.3
+            sufficiency = 0.3
 
         # ---- 数据新鲜度评分 ----
-        # 用实际数据截止日期 data_end 与 trade_date 对比
-        # 正确处理非交易日场景
         freshness = self._calc_freshness(data_end or trade_date, trade_date)
 
         logger.info(
@@ -456,109 +496,8 @@ class SignalProcessor:
         return tet
 
     # ------------------------------------------------------------------
-    # Action 计算（优先从 simplified_report 解析）
+    # （已移除 Action 计算 — 投资建议由简化报告中的 insight_and_decision 承载）
     # ------------------------------------------------------------------
-
-    def _compute_action(
-        self,
-        simplified_report: dict,
-        timing_indicator: float,
-        trend_score: float,
-        full_signal: str,
-    ) -> str:
-        """确定交易动作，优先级：
-
-        1. 从 simplified_report.insight_and_decision 文本中解析（与简化报告保持一致）
-        2. TET timing_indicator 信号（论文验证过）
-        3. final_trade_decision 文本正则提取（最后回退）
-        """
-        # 1. 从 simplified_report 的 insight 文本中解析
-        if simplified_report and isinstance(simplified_report, dict):
-            insight = simplified_report.get("insight_and_decision", "") or ""
-            action_from_insight = self._extract_action_from_text(insight)
-            if action_from_insight != "持有":
-                logger.info(f"🎯 [Action] 从 insight_and_decision 解析: {action_from_insight}")
-                return action_from_insight
-
-            # 也检查 core_disagreement 的共识
-            cd = simplified_report.get("core_disagreement", {}) or {}
-            if isinstance(cd, dict):
-                consensus = cd.get("consensus", "") or ""
-                action_from_consensus = self._extract_action_from_text(consensus)
-                if action_from_consensus != "持有":
-                    logger.info(f"🎯 [Action] 从 consensus 解析: {action_from_consensus}")
-                    return action_from_consensus
-
-        # 2. TET 量化信号
-        if timing_indicator > 1.0:
-            return "买入"
-        if timing_indicator < -1.0:
-            return "卖出"
-        if -1.0 <= timing_indicator <= 1.0 and abs(trend_score) > 0.4:
-            return "买入" if trend_score > 0 else "卖出"
-
-        # 3. 文本回退
-        if full_signal and isinstance(full_signal, str):
-            text_action = self._extract_action_from_text(full_signal)
-            if text_action:
-                return text_action
-
-        return "持有"
-
-    def _extract_action_from_text(self, text: str) -> str:
-        """从文本中提取买入/持有/卖出动作，使用关键词计数投票。
-
-        不采用"先匹配卖出→再匹配买入"的优先级，因为文本可能同时包含
-        两种信号（如头部"投资建议：买入"但正文全是看跌减仓）。
-        改为统计买卖关键词数量，取多数方。
-        """
-        if not text:
-            return "持有"
-
-        # 卖出/看跌关键词
-        sell_keywords = [
-            "建议卖出", "推荐卖出", "逢高减仓", "减仓", "减持",
-            "离场", "看空", "看跌", "看跌方", "卖出评级", "强烈卖出",
-            "管住手", "不操作", "不要买", "不要入场",
-            "接飞刀",  # "别急着接飞刀"
-            "期望值为负",  # 交易期望为负
-        ]
-        # 买入/看涨关键词
-        buy_keywords = [
-            "建议买入", "推荐买入", "逢低买入", "增持", "加仓",
-            "入场", "看多", "买入评级", "强烈买入", "抄底",
-        ]
-        # 持有/中性关键词
-        hold_keywords = [
-            "建议持有", "继续持有", "观望", "保持当前", "中性", "暂不操作",
-            "等企稳", "先观望", "再动手", "别急着", "别急", "再考虑",
-        ]
-
-        sell_count = sum(1 for kw in sell_keywords if kw in text)
-        buy_count = sum(1 for kw in buy_keywords if kw in text)
-        hold_count = sum(1 for kw in hold_keywords if kw in text)
-
-        # 如果卖出信号明显占优（卖>买+1），即使有"投资建议：买入"也以正文为准
-        if sell_count > buy_count + 1:
-            return "卖出"
-        if buy_count > sell_count + 1:
-            return "买入"
-        if sell_count > buy_count and sell_count >= hold_count:
-            return "卖出"
-        if buy_count > sell_count and buy_count >= hold_count:
-            return "买入"
-        if hold_count >= max(sell_count, buy_count):
-            return "持有"
-
-        # 英文匹配（最后兜底）
-        has_sell = bool(re.search(r"\bSELL\b|\b卖出\b", text, re.IGNORECASE))
-        has_buy = bool(re.search(r"\bBUY\b|\b买入\b", text, re.IGNORECASE))
-        if has_sell and not has_buy:
-            return "卖出"
-        if has_buy and not has_sell:
-            return "买入"
-
-        return "持有"
 
     # ------------------------------------------------------------------
     # Target Price 计算
@@ -589,77 +528,94 @@ class SignalProcessor:
     def _compute_target_price(
         self,
         simplified_report: dict,
-        action: str,
         current_price: Optional[float],
-        trend_score: float,
         bollinger: dict,
-    ) -> Optional[float]:
-        """科学推算目标价，优先级：
+    ) -> tuple:
+        """推算目标价和价格区间，综合技术面与基本面估值。
 
-        1. 从 simplified_report.insight_and_decision 中解析显式目标价
-        2. 基于布林带技术位推算（buy→上轨, sell→下轨, hold→中轨）
-        3. TET 趋势推算（最后回退）
+        优先级：
+        1. insight 显式目标价
+        2. PS 估值 + 技术面加权
+        3. MA20/MA60 中点（纯技术面）
+        4. 布林带中轨 / 当前价
+
+        PS 估值逻辑：
+          ps_target = 当前价 × (fair_ps / 当前ps)
+          tech_target = (MA20 + MA60) / 2
+          final = ps_target × 0.3 + tech_target × 0.7
+
+        Returns:
+            (target_price, price_range_dict)
         """
+        middle = bollinger.get("middle") if bollinger else None
+        upper = bollinger.get("upper") if bollinger else None
+        lower = bollinger.get("lower") if bollinger else None
+        ma60 = bollinger.get("ma60") if bollinger else None
+
         # ---- 1. 解析 insight 中的显式目标价 ----
         if simplified_report and isinstance(simplified_report, dict):
             insight = simplified_report.get("insight_and_decision", "") or ""
             explicit_target = self._extract_price_from_text(insight)
             if explicit_target and explicit_target > 0:
-                # 验证价格合理性（不偏离当前价太远）
                 if current_price and 0.5 < explicit_target / current_price < 3.0:
                     logger.info(f"💰 [目标价] 从 insight 解析: {explicit_target}")
-                    return round(explicit_target, 2)
+                    pr = {"lower": lower, "upper": upper} if lower and upper else {}
+                    return round(explicit_target, 2), pr
 
-        # ---- 2. 基于布林带 + 均线技术位 ----
-        if current_price and current_price > 0 and bollinger:
-            upper = bollinger.get("upper")
-            middle = bollinger.get("middle")
-            lower = bollinger.get("lower")
-            ma60 = bollinger.get("ma60")
-            ma20 = bollinger.get("ma20")
+        tech_target = None
+        ps_target = None
 
-            if action == "买入":
-                # 趋势看涨时：上轨为目标
-                if upper and current_price < upper:
-                    return round(upper, 2)
-                # 价格已突破上轨：用趋势幅度外推
-                if upper and current_price >= upper and trend_score > 0:
-                    band_width = upper - (middle or current_price)
-                    extrapolated = upper + band_width * 0.3
-                    return round(extrapolated, 2)
-                # 无布林带时用 MA60 作为中期目标
-                if ma60 and current_price < ma60:
-                    return round(ma60, 2)
-            elif action == "卖出":
-                # 趋势看跌时：下轨为目标
-                if lower and current_price > lower:
-                    return round(lower, 2)
-                # 价格已跌破下轨：用趋势幅度外推
-                if lower and current_price <= lower and trend_score < 0:
-                    band_width = (middle or current_price) - lower
-                    extrapolated = lower - band_width * 0.3
-                    return round(max(extrapolated, 0.01), 2)
-            else:  # 持有
-                # 中轨（20日均线）作为合理估值
-                if middle:
-                    return round(middle, 2)
-                # 回退到 MA60
-                if ma60:
-                    return round(ma60, 2)
+        # ---- 计算技术面目标：(MA20 + MA60) / 2 ----
+        if current_price and current_price > 0 and middle and ma60:
+            tech_target = (middle + ma60) / 2
 
-        # ---- 3. TET 趋势推算（最终回退） ----
+        # ---- 计算 PS 估值目标 ----
+        if (simplified_report and isinstance(simplified_report, dict)
+                and current_price and current_price > 0):
+            vm = simplified_report.get("valuation_metrics", {}) or {}
+            if isinstance(vm, dict):
+                current_ps = vm.get("ps_ratio")
+                if current_ps is not None and current_ps > 0:
+                    fair_ps = 1.0  # A 股保守默认值
+                    ps_target = current_price * (fair_ps / current_ps)
+                    logger.info(f"💰 [目标价·PS] PS={current_ps:.2f}, "
+                               f"fair_ps={fair_ps}, 估值={ps_target:.2f}")
+
+        # ---- 2. 综合加权 ----
+        if tech_target is not None and ps_target is not None:
+            if lower is not None:
+                ps_target = max(ps_target, lower)
+            if upper is not None:
+                ps_target = min(ps_target, upper)
+            target = ps_target * 0.3 + tech_target * 0.7
+            if lower is not None:
+                target = max(target, lower)
+            if upper is not None:
+                target = min(target, upper)
+            pr = {"lower": round(lower, 2), "upper": round(upper, 2)} if lower and upper else {}
+            logger.info(f"💰 [目标价] PS估值+技术面: "
+                       f"ps={ps_target:.2f}×0.3 + tech={tech_target:.2f}×0.7 = {target:.2f}")
+            return round(target, 2), pr
+
+        # ---- 3. 纯技术面：MA20 与 MA60 中点 ----
+        if tech_target is not None:
+            if lower is not None:
+                tech_target = max(tech_target, lower)
+            if upper is not None:
+                tech_target = min(tech_target, upper)
+            pr = {"lower": round(lower, 2), "upper": round(upper, 2)} if lower and upper else {}
+            logger.info(f"💰 [目标价] MA20+MA60中点: ({middle}+{ma60})/2 = {tech_target:.2f}")
+            return round(tech_target, 2), pr
+
+        # ---- 4. 布林带中轨 ----
+        if current_price and current_price > 0 and middle:
+            pr = {"lower": round(lower, 2), "upper": round(upper, 2)} if lower and upper else {}
+            return round(middle, 2), pr
+
+        # ---- 5. 最终回退 ----
         if current_price and current_price > 0:
-            trend_magnitude = min(abs(trend_score), 1.0)
-            if action == "买入":
-                upside = min(trend_magnitude * 0.15, 0.25)
-                return round(current_price * (1 + upside), 2)
-            elif action == "卖出":
-                downside = min(trend_magnitude * 0.10, 0.15)
-                return round(current_price * (1 - downside), 2)
-            else:
-                return round(current_price, 2)
-
-        return None
+            return round(current_price, 2), {}
+        return None, {}
 
     def _extract_price_from_text(self, text: str) -> Optional[float]:
         """从文本中提取明确的目标价格数字。"""
@@ -839,7 +795,6 @@ class SignalProcessor:
         self,
         simplified_report: dict,
         tet: dict,
-        action: str,
         current_price: Optional[float],
         target_price: Optional[float],
         confidence: float,

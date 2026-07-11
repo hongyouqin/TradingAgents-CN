@@ -1983,17 +1983,25 @@ class SimpleAnalysisService:
             summary = ""
             recommendation = ""
 
-            # 1. 优先从reports中的final_trade_decision提取summary（与web目录保持一致）
-            if isinstance(reports, dict) and 'final_trade_decision' in reports:
+            # 0. 优先从 simplified_report 的 executive_summary 提取（LLM生成的精准摘要）
+            if isinstance(formatted_decision, dict):
+                sr = formatted_decision.get('simplified_report') or {}
+                if isinstance(sr, dict):
+                    exec_summary = sr.get('executive_summary', '') or ''
+                    if exec_summary.strip():
+                        summary = exec_summary.strip()
+                        logger.info(f"📝 [SUMMARY] 从simplified_report.executive_summary提取: {len(summary)}字符")
+
+            # 1. 没有simplified_report摘要，从reports中的final_trade_decision提取
+            if not summary and isinstance(reports, dict) and 'final_trade_decision' in reports:
                 final_decision_content = reports['final_trade_decision']
                 if isinstance(final_decision_content, str) and len(final_decision_content) > 50:
-                    # 提取前200个字符作为摘要（与web目录完全一致）
                     summary = final_decision_content[:200].replace('#', '').replace('*', '').strip()
                     if len(final_decision_content) > 200:
                         summary += "..."
                     logger.info(f"📝 [SUMMARY] 从final_trade_decision提取摘要: {len(summary)}字符")
 
-            # 2. 如果没有final_trade_decision，从state中提取
+            # 2. 如果没有，从state中提取
             if not summary and isinstance(state, dict):
                 final_decision = state.get('final_trade_decision', '')
                 if isinstance(final_decision, str) and len(final_decision) > 50:
@@ -2002,19 +2010,22 @@ class SimpleAnalysisService:
                         summary += "..."
                     logger.info(f"📝 [SUMMARY] 从state.final_trade_decision提取摘要: {len(summary)}字符")
 
-            # 3. 生成recommendation（从decision的reasoning）
+            # 3. 生成recommendation（优先用 simplified_report 的 insight_and_decision）
             if isinstance(formatted_decision, dict):
-                action = formatted_decision.get('action', '持有')
-                target_price = formatted_decision.get('target_price')
-                reasoning = formatted_decision.get('reasoning', '')
-
-                # 生成投资建议
-                recommendation = f"投资建议：{action}。"
-                if target_price:
-                    recommendation += f"目标价格：{target_price}元。"
-                if reasoning:
-                    recommendation += f"决策依据：{reasoning}"
-                logger.info(f"💡 [RECOMMENDATION] 生成投资建议: {len(recommendation)}字符")
+                sr = formatted_decision.get('simplified_report') or {}
+                if isinstance(sr, dict) and sr.get('insight_and_decision', '').strip():
+                    recommendation = sr['insight_and_decision'].strip()
+                    logger.info(f"💡 [RECOMMENDATION] 从simplified_report.insight_and_decision提取: {len(recommendation)}字符")
+                else:
+                    action = formatted_decision.get('action', '持有')
+                    target_price = formatted_decision.get('target_price')
+                    reasoning = formatted_decision.get('reasoning', '')
+                    recommendation = f"投资建议：{action}。"
+                    if target_price:
+                        recommendation += f"目标价格：{target_price}元。"
+                    if reasoning:
+                        recommendation += f"决策依据：{reasoning}"
+                    logger.info(f"💡 [RECOMMENDATION] 从decision生成: {len(recommendation)}字符")
 
             # 4. 如果还是没有，从其他报告中提取
             if not summary and isinstance(reports, dict):
