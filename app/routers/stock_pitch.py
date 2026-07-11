@@ -295,7 +295,7 @@ async def import_signals_with_deduplication(
 @router.get(
     "/daily-pitch",
     summary="获取指定日期的股票推荐",
-    description="根据日期查询当日的股票推荐（buy_signal=1），按timing_indicator降序排序"
+    description="根据日期查询当日的股票推荐（buy_signal=1），按anchored_trend_score降序排序"
 )
 async def get_daily_pitch(
     date: str = Query(..., description="查询日期 (格式: YYYY-MM-DD，例如: 2026-03-18)"),
@@ -346,8 +346,8 @@ async def get_daily_pitch(
                 "recommendations": []
             }
         
-        # 查询记录，按timing_indicator降序排序
-        cursor = collection.find(query).sort("timing_indicator", DESCENDING).limit(limit)
+        # 查询记录，按anchored_trend_score降序排序
+        cursor = collection.find(query).sort("anchored_trend_score", DESCENDING).limit(limit)
         
         # 转换ObjectId为字符串并格式化返回数据
         recommendations = []
