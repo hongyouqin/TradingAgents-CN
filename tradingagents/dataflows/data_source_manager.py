@@ -604,10 +604,36 @@ class DataSourceManager:
         except Exception as e:
             logger.warning(f"⚠️ [TET-HS300] AKShare获取失败: {e}")
 
+        # 方式3: BaoStock（兜底，国内访问稳定无需API Key，TCP直连不受HTTP代理影响）
+        try:
+            import baostock as bs
+            lg = bs.login()
+            try:
+                s_bs = pd.to_datetime(start_date).strftime('%Y-%m-%d') if not isinstance(start_date, str) else start_date
+                e_bs = pd.to_datetime(end_date).strftime('%Y-%m-%d') if not isinstance(end_date, str) else end_date
+                rs = bs.query_history_k_data_plus(
+                    "sh.000300", "date,close",
+                    start_date=s_bs, end_date=e_bs,
+                    frequency="d", adjustflag="2"
+                )
+                rows = []
+                while rs.next():
+                    rows.append(rs.get_row_data())
+                if rows:
+                    df = pd.DataFrame(rows, columns=["trade_date", "close"])
+                    df["trade_date"] = pd.to_datetime(df["trade_date"])
+                    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+                    logger.info(f"✅ [TET-HS300] BaoStock获取沪深300成功: {len(df)}条")
+                    return df
+            finally:
+                bs.logout()
+        except Exception as e:
+            logger.warning(f"⚠️ [TET-HS300] BaoStock获取失败: {e}")
+
         logger.warning("⚠️ [TET-HS300] 所有方式均无法获取沪深300数据")
         return pd.DataFrame(columns=['trade_date', 'close'])
 
-    def _compute_tet_section(self, data: pd.DataFrame) -> str:
+    def _compute_tet_section(self, data: pd.DataFrame, symbol: str = "") -> str:
         """
         使用 ATrendEmotionTiming 从股票 DataFrame 计算 TET（趋势-情绪-时机）指标。
         自动获取沪深300指数数据作为基准对比信号，与原始 calculate_tet_indicators 保持一致。
@@ -630,15 +656,20 @@ class DataSourceManager:
             # 准备股票数据：date → trade_date，并选择标准列
             stock_df = df[['date', 'open', 'high', 'low', 'close', 'vol']].copy()
             stock_df = stock_df.rename(columns={'date': 'trade_date'})
+            # 🔧 修复：上游Provider可能返回object类型日期，而HS300数据是datetime64，merge时类型冲突
+            stock_df['trade_date'] = pd.to_datetime(stock_df['trade_date'])
+
+            logger.info(f"📊 [TET计算] 开始为股票 {symbol} 计算TET指标，数据{len(stock_df)}条，日期范围 {stock_df['trade_date'].iloc[0]} ~ {stock_df['trade_date'].iloc[-1]}")
 
             # 获取沪深300指数数据
             hs300_df = self._fetch_hs300_data(
                 stock_df['trade_date'].iloc[0],
                 stock_df['trade_date'].iloc[-1]
             )
+            logger.info(f"📊 [TET计算] {symbol} 沪深300数据获取完成: {len(hs300_df)}条")
 
             # 计算 TET
-            tet = ATrendEmotionTiming("tet_calc")
+            tet = ATrendEmotionTiming(symbol)
             tet.load_data(stock_df, hs300_df)
             tet.calculate_trend_score()
             tet.calculate_emotion_index()
@@ -655,10 +686,10 @@ class DataSourceManager:
 ### 👉 系统建议: {latest['action']}
 ⚠️ 规则：AI 不得擅自修改量化结论，必须结合布林带、量价综合判断
 """
-            logger.info(f"✅ TET 计算成功 (ATrendEmotionTiming): {latest}")
+            logger.info(f"✅ [TET计算] {symbol} TET计算成功: {latest}")
             return section
         except Exception as e:
-            logger.warning(f"⚠️ TET 计算异常: {e}")
+            logger.warning(f"⚠️ [TET计算] {symbol} TET计算异常: {e}")
             return ""
 
     def _format_stock_data_response(self, data: pd.DataFrame, symbol: str, stock_name: str, start_date: str, end_date: str) -> str:
@@ -797,7 +828,7 @@ class DataSourceManager:
             result += f"   平均成交量: {volume_value:,.0f}股\n"
 
             # 计算 TET（趋势-情绪-时机）指标并追加
-            result += self._compute_tet_section(data)
+            result += self._compute_tet_section(data, symbol=symbol)
 
             return result
         except Exception as e:
