@@ -156,6 +156,7 @@ def create_market_analyst(llm, toolkit):
                     "## 📊 股票基本信息\n"
                     "## 📦 量价关系分析\n"
                     "## 📈 传统技术指标（均线、MACD、RSI、布林带）\n"
+                    "## 🧭 TET趋势能量型交易系统（必须引用TET工具返回的四个核心数值：trend_score趋势得分、emotion_index情绪指数、anchored_trend_score锚定趋势、timing_indicator时机指标及action信号，不得编造TET不存在概念）\n"
                     "## 📉 短中期趋势\n"
                     "## 💡 投资建议（结合布林形态 + TET）\n"
                     "\n"
@@ -242,7 +243,7 @@ def create_market_analyst(llm, toolkit):
 强制规则：
 1. 布林收口向上突破 = 强势延续 → 持仓/加仓
 2. 高位 RSI 超买 + 布林向上 = 强势钝化 → 不看空卖出
-3. 以 TET 为择时核心
+3. 以 TET 为择时核心，**必须将TET工具返回的具体数值填入报告相应位置，不得编造TET不存在的概念（如能量柱、零轴、红色信号线等）**
 4. 优先量价验证
 
 结构：
@@ -250,8 +251,14 @@ def create_market_analyst(llm, toolkit):
 ## 一、基本信息
 ## 二、量价分析
 ## 三、传统指标（布林带重点）
-## 四、趋势判断
-## 五、操作建议（实战）
+## 四、TET趋势能量型交易系统（★ 量化核心 ★）
+- 必须从工具返回数据中提取 TET 四个核心数值：
+  - trend_score（趋势得分）、emotion_index（情绪指数）
+  - anchored_trend_score（锚定趋势）、timing_indicator（时机指标）
+- 必须给出 action（BUY/SELL/HOLD）
+- 结合近几日的TET信号变化解读
+## 五、趋势判断（结合TET）
+## 六、操作建议（实战）
 """
                     messages = state["messages"] + [result] + tool_messages + [HumanMessage(content=analysis_prompt)]
                     final_result = llm.invoke(messages)
