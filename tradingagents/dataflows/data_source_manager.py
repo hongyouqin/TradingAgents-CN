@@ -471,6 +471,28 @@ class DataSourceManager:
                 logger.info(f"⏭️ [实时合并] {symbol}: market_quotes 缺少 trade_date，跳过")
                 return df
 
+            # 🔧 BUG修复: 检查 close 是否有效（盘前或无交易时 close=0）
+            realtime_close = mq.get('close')
+            realtime_amount = mq.get('amount', 0) or 0
+            realtime_volume = mq.get('volume', 0) or 0
+            if realtime_close is None or realtime_close == 0:
+                # 成交额和成交量也为 0 → 盘前或无交易数据，跳过合并
+                if realtime_amount == 0 and realtime_volume == 0:
+                    logger.info(f"⏭️ [实时合并] {symbol}: market_quotes close=0 且无成交(amount=0, volume=0)，"
+                                f"可能为盘前或无交易数据，跳过合并")
+                    return df
+                # close=0 但 amount>0 或 volume>0 → 极端异常(理论上不可能)
+                # 降级: 用前一日 close 回填，并记录警告
+                logger.warning(f"⚠️ [实时合并] {symbol}: close=0 但 amount>0，数据异常，尝试用前日收盘价回填")
+                if len(df) >= 2:
+                    df_last_close = df.iloc[-1].get('close')
+                    if df_last_close and df_last_close > 0:
+                        realtime_close = float(df_last_close)
+                        logger.info(f"↩️ [实时合并] {symbol}: 用前日收盘价 {realtime_close} 回填")
+                else:
+                    logger.warning(f"⚠️ [实时合并] {symbol}: 历史数据不足，无法回填 close，跳过合并")
+                    return df
+
             # 3. 统一日期格式为 YYYY-MM-DD
             realtime_date_str = str(realtime_date)
             if len(realtime_date_str) == 8 and realtime_date_str.isdigit():
@@ -524,7 +546,8 @@ class DataSourceManager:
                 elif col == 'low':
                     realtime_row[col] = mq.get('low')
                 elif col == 'close':
-                    realtime_row[col] = mq.get('close')
+                    # 使用前面验证后的 realtime_close（已处理 close=0 回填逻辑）
+                    realtime_row[col] = realtime_close
                 elif col == 'volume':
                     realtime_row[col] = volume_val
                 elif col == 'vol':
@@ -532,7 +555,15 @@ class DataSourceManager:
                 elif col == 'amount':
                     realtime_row[col] = amount_val
                 elif col == 'pct_chg':
-                    realtime_row[col] = mq.get('pct_chg')
+                    # 若 close 被回填过，则用前日收盘价重新计算 pct_chg
+                    if realtime_close != (mq.get('close') or 0):
+                        prev_close_for_pct = mq.get('pre_close')
+                        if prev_close_for_pct and prev_close_for_pct > 0:
+                            realtime_row[col] = round((realtime_close - prev_close_for_pct) / prev_close_for_pct * 100, 2)
+                        else:
+                            realtime_row[col] = 0.0
+                    else:
+                        realtime_row[col] = mq.get('pct_chg')
                 elif col == 'pre_close':
                     realtime_row[col] = mq.get('pre_close')
                 elif col == 'ts_code':
@@ -747,6 +778,15 @@ class DataSourceManager:
             latest_data = data.iloc[-1]
 
             latest_price = latest_data.get('close', 0)
+            # 🔧 BUG修复: 若实时数据的 close=0，退化到前一日收盘价（盘前或无交易兜底）
+            if latest_price == 0 or latest_price is None:
+                if len(data) >= 2:
+                    fallback_close = data.iloc[-2].get('close', 0)
+                    if fallback_close and fallback_close > 0:
+                        logger.warning(f"⚠️ [兜底修复] {symbol} 最新 close=0，退化为前日收盘价 {fallback_close}")
+                        latest_price = float(fallback_close)
+                    else:
+                        latest_price = 0.0
             prev_close = data.iloc[-2].get('close', latest_price) if len(data) > 1 else latest_price
             change = latest_price - prev_close
             change_pct = (change / prev_close * 100) if prev_close != 0 else 0
