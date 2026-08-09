@@ -28,6 +28,7 @@ from app.routers import multi_market_stocks as multi_market_stocks_router
 from app.routers import notifications as notifications_router
 from app.routers import websocket_notifications as websocket_notifications_router
 from app.routers import scheduler as scheduler_router
+from app.routers import sector_rotation as sector_rotation_router
 from app.services.compensation_service import compensation_service
 from app.services.basics_sync_service import get_basics_sync_service
 from app.services.memory_state_manager import get_memory_state_manager
@@ -63,6 +64,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.services.quotes_ingestion_service import QuotesIngestionService
 from app.routers import paper as paper_router
 from app.routers import data_overview as data_overview_router
+from app.routers import market_breadth as market_breadth_router
 from app.services.recharge_package_service import recharge_package_service
 
 
@@ -705,6 +707,18 @@ async def lifespan(app: FastAPI):
             name="数据概览同步‑15:00（预约披露日 + 雪球热度 + 交易排行榜 + 人气榜）",
         )
         logger.info(f"📊 数据概览同步已配置: 工作日 08:30, 15:00 ({settings.TIMEZONE})")
+
+        # ==================== 阿姆氏指标（TRIN）每日预计算 ====================
+        from app.services.arms_index_service import run_market_trin_daily_sync
+        # 交易日收盘后 18:00 执行（此时 Tushare 16:00 / AKShare 17:00 的日线同步已完成）
+        scheduler.add_job(
+            run_market_trin_daily_sync,
+            CronTrigger.from_crontab("0 18 * * 1-5", timezone=settings.TIMEZONE),
+            id="market_trin_daily_sync",
+            name="阿姆氏指标每日预计算（TRIN → market_trin_daily）",
+        )
+        logger.info("📊 阿姆氏指标每日预计算已配置: 工作日 18:00 (market_trin_daily)")
+
         scheduler.start()
         
         # 启动补偿算力账户消费冻结服务
@@ -902,6 +916,11 @@ app.include_router(data_overview_router.hot_router)
 app.include_router(data_overview_router.deal_router)
 app.include_router(data_overview_router.rank_router)
 
+# 板块轮动监测
+app.include_router(sector_rotation_router.router)
+
+# 全市场宽度指标（阿姆氏指标 TRIN）
+app.include_router(market_breadth_router.router)
 
 @app.get("/")
 async def root():

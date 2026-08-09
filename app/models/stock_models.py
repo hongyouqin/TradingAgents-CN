@@ -399,3 +399,243 @@ class StockHotRankEMResponse(BaseModel):
     data: Optional[List[StockHotRankEMItem]] = None
     total: int = 0
     message: str = ""
+
+
+# ===================== 板块轮动监测模块 =====================
+
+
+class SectorRotationItem(BaseModel):
+    """板块轮动数据项"""
+    industry: str = Field(..., description="行业名称")
+    total_amount: float = Field(0, description="该行业总成交额（元）")
+    market_amount: float = Field(0, description="全市场总成交额（元）")
+    ratio: float = Field(0, description="成交额占比（%）")
+    stock_count: int = Field(0, description="该行业股票数量")
+    rank: int = Field(0, description="排名")
+    avg_amount: float = Field(0, description="平均成交额（元）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "industry": "半导体",
+                "total_amount": 12580000000,
+                "market_amount": 800000000000,
+                "ratio": 1.5725,
+                "stock_count": 120,
+                "rank": 1,
+                "avg_amount": 104833333,
+            }
+        }
+
+
+class SectorRotationTrendItem(BaseModel):
+    """板块成交额占比趋势数据项"""
+    trade_date: str = Field(..., description="交易日期")
+    sector_amount: float = Field(0, description="板块当日成交额（元）")
+    market_amount: float = Field(0, description="全市场当日成交额（元）")
+    ratio: float = Field(0, description="成交额占比（%）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "trade_date": "2026-07-16",
+                "sector_amount": 12580000000,
+                "market_amount": 800000000000,
+                "ratio": 1.5725,
+            }
+        }
+
+
+class SectorRotationListResponse(BaseModel):
+    """板块轮动排名列表响应"""
+    success: bool = True
+    data: Optional[Dict[str, Any]] = None
+    message: str = ""
+
+
+class SectorRotationDetailResponse(BaseModel):
+    """板块轮动详情（含趋势数据）响应"""
+    success: bool = True
+    data: Optional[Dict[str, Any]] = None
+    message: str = ""
+
+
+# ===================== 双维度板块轮动势能模型 =====================
+
+
+class SectorMoneyflowRecord(BaseModel):
+    """个股资金流向记录 - 对应 MongoDB moneyflow_data 集合"""
+    ts_code: str = Field(..., description="TS股票代码")
+    trade_date: str = Field(..., description="交易日期")
+    # 小单
+    buy_sm_vol: Optional[float] = Field(None, description="小单买入量(手)")
+    buy_sm_amount: Optional[float] = Field(None, description="小单买入金额(万元)")
+    sell_sm_vol: Optional[float] = Field(None, description="小单卖出量(手)")
+    sell_sm_amount: Optional[float] = Field(None, description="小单卖出金额(万元)")
+    # 中单
+    buy_md_vol: Optional[float] = Field(None, description="中单买入量(手)")
+    buy_md_amount: Optional[float] = Field(None, description="中单买入金额(万元)")
+    sell_md_vol: Optional[float] = Field(None, description="中单卖出量(手)")
+    sell_md_amount: Optional[float] = Field(None, description="中单卖出金额(万元)")
+    # 大单（主力）
+    buy_lg_vol: Optional[float] = Field(None, description="大单买入量(手)")
+    buy_lg_amount: Optional[float] = Field(None, description="大单买入金额(万元)")
+    sell_lg_vol: Optional[float] = Field(None, description="大单卖出量(手)")
+    sell_lg_amount: Optional[float] = Field(None, description="大单卖出金额(万元)")
+    # 超大单（主力）
+    buy_elg_vol: Optional[float] = Field(None, description="超大单买入量(手)")
+    buy_elg_amount: Optional[float] = Field(None, description="超大单买入金额(万元)")
+    sell_elg_vol: Optional[float] = Field(None, description="超大单卖出量(手)")
+    sell_elg_amount: Optional[float] = Field(None, description="超大单卖出金额(万元)")
+    # 净额
+    net_mf_vol: Optional[float] = Field(None, description="净流入量(手)")
+    net_mf_amount: Optional[float] = Field(None, description="净流入金额(万元)")
+
+    @property
+    def main_force_buy_amount(self) -> float:
+        """主力买入金额（大单+超大单）万元"""
+        return float(self.buy_lg_amount or 0) + float(self.buy_elg_amount or 0)
+
+    @property
+    def main_force_sell_amount(self) -> float:
+        """主力卖出金额（大单+超大单）万元"""
+        return float(self.sell_lg_amount or 0) + float(self.sell_elg_amount or 0)
+
+    @property
+    def main_force_net_amount(self) -> float:
+        """主力净流入金额（万元）"""
+        return self.main_force_buy_amount - self.main_force_sell_amount
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "ts_code": "000001.SZ",
+                "trade_date": "2026-07-20",
+                "buy_lg_amount": 12500.0,
+                "sell_lg_amount": 8900.0,
+                "buy_elg_amount": 5600.0,
+                "sell_elg_amount": 3200.0,
+                "net_mf_amount": 8200.0,
+            }
+        }
+
+
+class SectorMoneyflowAggregated(BaseModel):
+    """板块级资金流聚合结果"""
+    industry: str = Field(..., description="行业名称")
+    trade_date: str = Field(..., description="交易日期")
+    stock_count: int = Field(0, description="有资金流数据的股票数")
+    # 主力资金汇总
+    total_main_force_buy: float = Field(0, description="主力总买入(万元)")
+    total_main_force_sell: float = Field(0, description="主力总卖出(万元)")
+    total_main_force_net: float = Field(0, description="主力净流入(万元)")
+    # 散户资金汇总
+    total_retail_buy: float = Field(0, description="散户总买入(万元)")
+    total_retail_sell: float = Field(0, description="散户总卖出(万元)")
+    total_retail_net: float = Field(0, description="散户净流入(万元)")
+    # 全市场当日主力资金
+    market_main_force_buy: float = Field(0, description="全市场主力总买入(万元)")
+    market_main_force_sell: float = Field(0, description="全市场主力总卖出(万元)")
+    # 衍生指标
+    main_force_ratio: float = Field(0, description="主力资金强度 = 板块主力净流入 / 板块成交额 * 100")
+    main_force_dominance: float = Field(0, description="主控力 = (主力买入-主力卖出)/(主力买入+主力卖出) 归一化[-1,1]")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "industry": "半导体",
+                "trade_date": "2026-07-20",
+                "stock_count": 120,
+                "total_main_force_buy": 456000.0,
+                "total_main_force_sell": 312000.0,
+                "total_main_force_net": 144000.0,
+                "main_force_ratio": 3.25,
+                "main_force_dominance": 0.187,
+            }
+        }
+
+
+class SectorMomentumScoreItem(BaseModel):
+    """板块轮动势能评分项"""
+    industry: str = Field(..., description="行业名称")
+    rank: int = Field(0, description="综合排名")
+
+    # 维度一：主力资金流
+    flow_score: float = Field(0, description="资金流强度得分 [0,100]")
+    flow_raw: float = Field(0, description="资金流原始值")
+    flow_trend_5d: Optional[float] = Field(None, description="5日资金流变化趋势")
+    flow_trend_10d: Optional[float] = Field(None, description="10日资金流变化趋势")
+
+    # 维度二：成交额占比
+    turnover_score: float = Field(0, description="成交额占比得分 [0,100]")
+    turnover_ratio: float = Field(0, description="当日成交额占比(%)")
+    turnover_trend_5d: Optional[float] = Field(None, description="5日占比变化")
+    turnover_trend_10d: Optional[float] = Field(None, description="10日占比变化")
+
+    # 综合评分
+    composite_score: float = Field(0, description="综合势能得分 [0,100]")
+
+    # 分类标签
+    signal: str = Field("中性", description="信号分类: 真上涨/假上涨/低位切换/高位出逃/中性/观望")
+    signal_detail: str = Field("", description="信号详细说明")
+
+    # 原始数据
+    stock_count: int = Field(0, description="该行业股票数")
+    total_main_force_net: float = Field(0, description="主力净流入(万元)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "industry": "半导体",
+                "rank": 1,
+                "flow_score": 85.5,
+                "flow_raw": 144000.0,
+                "flow_trend_5d": 12.3,
+                "turnover_score": 72.0,
+                "turnover_ratio": 3.25,
+                "turnover_trend_5d": 0.45,
+                "composite_score": 78.75,
+                "signal": "真上涨",
+                "signal_detail": "主力资金持续流入+成交额占比提升，强势主升浪",
+                "stock_count": 120,
+                "total_main_force_net": 144000.0,
+            }
+        }
+
+
+class SectorMomentumTrendItem(BaseModel):
+    """板块势能趋势曲线数据点"""
+    trade_date: str = Field(..., description="交易日期")
+    flow_score: float = Field(0, description="资金流得分")
+    turnover_score: float = Field(0, description="成交额占比得分")
+    composite_score: float = Field(0, description="综合得分")
+    main_force_net: float = Field(0, description="主力净流入(万元)")
+    turnover_ratio: float = Field(0, description="成交额占比(%)")
+    signal: str = Field("中性", description="当日信号")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "trade_date": "2026-07-20",
+                "flow_score": 85.5,
+                "turnover_score": 72.0,
+                "composite_score": 78.75,
+                "main_force_net": 144000.0,
+                "turnover_ratio": 3.25,
+                "signal": "真上涨",
+            }
+        }
+
+
+class SectorMomentumRankingResponse(BaseModel):
+    """板块轮动势能排名响应"""
+    success: bool = True
+    data: Optional[Dict[str, Any]] = None
+    message: str = ""
+
+
+class SectorMomentumTrendResponse(BaseModel):
+    """板块轮动势能趋势响应"""
+    success: bool = True
+    data: Optional[Dict[str, Any]] = None
+    message: str = ""

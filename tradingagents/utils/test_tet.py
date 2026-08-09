@@ -197,7 +197,7 @@ def get_hs300_df(start_date, end_date):
 # ==============================================
 if __name__ == "__main__":
     # 配置参数
-    stock_code = "600207"  # 浦发银行
+    stock_code = "600522"  
     end_date = datetime.today().strftime("%Y%m%d")
     start_date = "20150101"
     
