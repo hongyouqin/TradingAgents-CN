@@ -25,9 +25,11 @@
     - 每个维度 Min-Max 归一化到 [0, 100]
     - 综合评分 = 0.5 × flow_score + 0.5 × turnover_score
 """
+import asyncio
 import logging
 import math
 import statistics
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
@@ -164,9 +166,20 @@ class SectorRotationMomentumService:
         "高位出逃": 5,  # 高占比回落 + 主力出逃，退潮信号
     }
 
+    # 排名结果缓存 TTL（秒）：缓存过期后返回旧缓存并在后台异步重算，不阻塞请求
+    # 数据更新频率：资金流每日收盘更新，成交额占比盘中每 30 分钟同步，3 分钟缓存影响可忽略
+    CACHE_TTL_SECONDS = 180
+
     def __init__(self):
         self.rotation_service = get_sector_rotation_service()
         self.moneyflow_service = get_sector_moneyflow_service()
+
+        # 排名结果缓存（进程内 TTL，stale-while-revalidate）
+        self._ranking_cache: Optional[List[Dict]] = None
+        self._ranking_cache_at: Optional[float] = None
+        self._ranking_cache_key: Optional[Tuple] = None
+        self._last_cache_hit: bool = False
+        self._revalidate_lock = asyncio.Lock()  # 防止并发触发多次后台重算
 
     async def get_momentum_ranking(
         self,
@@ -174,18 +187,95 @@ class SectorRotationMomentumService:
         days: int = 10,
         weight_flow: float = DEFAULT_WEIGHT_FLOW,
         weight_turnover: float = DEFAULT_WEIGHT_TURNOVER,
+        refresh: bool = False,
     ) -> List[Dict]:
-        """计算双维度板块轮动势能排名
+        """计算双维度板块轮动势能排名（stale-while-revalidate 缓存）
+
+        始终优先返回缓存（即使已过期，过期后触发后台异步重算，不阻塞当前请求）；
+        无缓存（首次）或 refresh=True 时同步计算。
 
         Args:
             top_n: 返回前 N 个板块
             days: 回溯天数（用于计算趋势）
             weight_flow: 资金流维度权重
             weight_turnover: 成交额占比维度权重
+            refresh: 是否强制同步重算（忽略缓存）
 
         Returns:
-            按综合评分降序排列的板块势能列表
+            按信号分类排序（真上涨最前）的板块势能列表
         """
+        cache_key = (top_n, days, round(weight_flow, 4), round(weight_turnover, 4))
+
+        # 强制刷新：忽略缓存，同步重算
+        if refresh:
+            self._last_cache_hit = False
+            return await self._compute_and_cache(cache_key, top_n, days, weight_flow, weight_turnover)
+
+        # 缓存存在 → 始终优先返回缓存（stale-while-revalidate）
+        if self._ranking_cache is not None and self._ranking_cache_key == cache_key:
+            self._last_cache_hit = True
+            if time.time() - self._ranking_cache_at >= self.CACHE_TTL_SECONDS:
+                # 已过期：后台异步重算（本次仍返回旧缓存，不阻塞请求）
+                asyncio.create_task(
+                    self._revalidate_worker(cache_key, top_n, days, weight_flow, weight_turnover)
+                )
+                logger.info("⚡ 返回过期缓存，后台异步重算已触发")
+            # 重建列表与 dict，防止调用方修改污染缓存（item 字段均为标量，浅拷贝 dict 即隔离）
+            return [{**item} for item in self._ranking_cache]
+
+        # 无缓存（首次调用）：同步计算
+        self._last_cache_hit = False
+        return await self._compute_and_cache(cache_key, top_n, days, weight_flow, weight_turnover)
+
+    async def _compute_and_cache(
+        self,
+        cache_key: Tuple,
+        top_n: Optional[int],
+        days: int,
+        weight_flow: float,
+        weight_turnover: float,
+    ) -> List[Dict]:
+        """同步计算轮动势能并写入缓存"""
+        sector_scores = await self._compute_ranking(top_n, days, weight_flow, weight_turnover)
+        self._ranking_cache = sector_scores
+        self._ranking_cache_at = time.time()
+        self._ranking_cache_key = cache_key
+        logger.info(f"🔁 momentum-ranking 计算完成并写入缓存: {len(sector_scores)} 个板块")
+        return sector_scores
+
+    async def _revalidate_worker(
+        self,
+        cache_key: Tuple,
+        top_n: Optional[int],
+        days: int,
+        weight_flow: float,
+        weight_turnover: float,
+    ) -> None:
+        """缓存过期后的后台异步重算（防并发、防重复），由 asyncio.create_task 触发"""
+        if self._revalidate_lock.locked():
+            return
+        try:
+            async with self._revalidate_lock:
+                # 等待锁期间可能已被其它重算任务更新，二次检查
+                if (
+                    self._ranking_cache is not None
+                    and self._ranking_cache_key == cache_key
+                    and time.time() - self._ranking_cache_at < self.CACHE_TTL_SECONDS
+                ):
+                    return
+                logger.info("♻️ 缓存过期，后台异步重算 momentum-ranking...")
+                await self._compute_and_cache(cache_key, top_n, days, weight_flow, weight_turnover)
+        except Exception as e:
+            logger.error(f"❌ 后台重算 momentum-ranking 失败: {e}", exc_info=True)
+
+    async def _compute_ranking(
+        self,
+        top_n: Optional[int],
+        days: int,
+        weight_flow: float,
+        weight_turnover: float,
+    ) -> List[Dict]:
+        """双维度轮动势能计算核心（不写缓存）"""
         db = get_mongo_db()
 
         # 1. 获取所有板块当日成交额占比排名
@@ -403,6 +493,22 @@ class SectorRotationMomentumService:
             sector_scores = sector_scores[:top_n]
 
         return sector_scores
+
+    def get_ranking_cache_info(self) -> Dict:
+        """获取排名接口的缓存状态（供路由层返回给前端识别数据时效）"""
+        info: Dict = {
+            "hit": self._last_cache_hit,
+            "stale": False,
+            "ttl_seconds": self.CACHE_TTL_SECONDS,
+            "cached_at": None,
+            "age_seconds": None,
+        }
+        if self._ranking_cache_at is not None:
+            from datetime import datetime as _dt
+            info["cached_at"] = _dt.fromtimestamp(self._ranking_cache_at).strftime("%Y-%m-%d %H:%M:%S")
+            info["age_seconds"] = round(time.time() - self._ranking_cache_at, 1)
+            info["stale"] = info["age_seconds"] >= self.CACHE_TTL_SECONDS  # 已过期但返回了旧缓存
+        return info
 
     @staticmethod
     def _sort_by_signal(sector_scores: List[Dict]) -> List[Dict]:

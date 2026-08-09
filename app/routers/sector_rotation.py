@@ -213,12 +213,18 @@ async def get_momentum_ranking(
     days: int = Query(10, ge=5, le=60, description="趋势回溯天数"),
     weight_flow: float = Query(0.5, ge=0, le=1, description="资金流维度权重"),
     weight_turnover: float = Query(0.5, ge=0, le=1, description="成交额占比维度权重"),
-    _user=Depends(get_current_user),
+    refresh: bool = Query(False, description="强制同步重算（默认始终优先返回缓存，过期后台异步刷新）"),
 ):
     """【双维度板块轮动势能排名】
 
     结合「主力资金流强度」和「板块成交额占比趋势」两个维度，
     识别板块轮动中的真上涨、假上涨、低位切换、高位出逃信号。
+
+    性能说明:
+        - 结果带进程内 TTL 缓存（默认 3 分钟）：**始终优先返回缓存**，即使缓存已过期也立即返回
+          旧数据，并在后台异步重算（stale-while-revalidate），请求从不阻塞
+        - 数据库聚合从"每个请求一次"降到"每 3 分钟最多一次"，前端秒开
+        - refresh=true 可强制同步重算（一般无需使用）
 
     维度说明:
         - flow_score:     主力资金流强度得分 [0,100]，正值为主力净流入
@@ -241,6 +247,8 @@ async def get_momentum_ranking(
     数据时效:
         - 每条记录含 data_date（YYYYMMDD）：该行业评分基于的最新交易日
         - 有资金流数据 → 最新资金流交易日；无资金流数据（降级）→ 成交额占比趋势最新交易日
+        - 响应顶层含 cache 字段：{hit, stale, cached_at, age_seconds, ttl_seconds}
+          stale=true 表示本次返回的是已过期的旧缓存（后台正在异步重算）
 
     Args:
         top_n: 返回前N个板块（默认全部）
@@ -255,6 +263,7 @@ async def get_momentum_ranking(
             days=days,
             weight_flow=weight_flow,
             weight_turnover=weight_turnover,
+            refresh=refresh,
         )
 
         # 统计各信号数量
@@ -272,6 +281,7 @@ async def get_momentum_ranking(
                 "weight_flow": weight_flow,
                 "weight_turnover": weight_turnover,
             },
+            "cache": service.get_ranking_cache_info(),
         })
     except Exception as e:
         logger.exception(f"获取轮动势能排名失败: {e}")
