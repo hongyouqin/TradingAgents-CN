@@ -1,7 +1,9 @@
 from decimal import Decimal
 import json
 import logging
+from datetime import datetime, time as dtime
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
@@ -217,14 +219,47 @@ async def get_recharge_orders(
     return {"code": 0, "message": "success", "data": orders}
 
 # ==================== 消费价格 ====================
+# 动态调价规则（北京时间）：
+# - 白天高峰：工作日 09:00-12:00、14:00-18:00
+#   - 标准分析 4.9⚡，深度推理 8.9⚡
+# - 晚上低峰：其余时间（含周末、午休、夜间）
+#   - 标准分析 3.9⚡，深度推理 5.9⚡
+def _is_peak_price_time(now: Optional[datetime] = None) -> bool:
+    """判断当前是否处于白天高峰计价时段（工作日 09:00-12:00、14:00-18:00）"""
+    tz = ZoneInfo(settings.TIMEZONE)
+    now = now or datetime.now(tz)
+
+    # 周末不区分高峰，按低峰价
+    if now.weekday() > 4:
+        return False
+
+    t = now.time()
+    return (dtime(9, 0) <= t < dtime(12, 0)) or (dtime(14, 0) <= t < dtime(18, 0))
+
+
 @router.get("/consume/price")
 async def get_analysis_price():
+    is_peak = _is_peak_price_time()
+    if is_peak:
+        period = "day"
+        period_label = "白天"
+        prices = {
+            "standard": {"name": "standard", "label": "标准分析", "price": 4.9, "description": "快速常规报告"},
+            "deep": {"name": "deep", "label": "深度推理", "price": 8.9, "description": "深度复杂分析"}
+        }
+    else:
+        period = "night"
+        period_label = "晚上"
+        prices = {
+            "standard": {"name": "standard", "label": "标准分析", "price": 3.9, "description": "快速常规报告"},
+            "deep": {"name": "deep", "label": "深度推理", "price": 5.9, "description": "深度复杂分析"}
+        }
+
     return {
         "unit": "⚡",
-        "types": {
-            "standard": {"name": "standard", "label": "标准分析", "price": 2.9, "description": "快速常规报告"},
-            "deep": {"name": "deep", "label": "深度推理", "price": 3.8, "description": "深度复杂分析"}
-        }
+        "period": period,
+        "period_label": period_label,
+        "types": prices
     }
 
 # ==================== 微信支付回调====================
